@@ -1,0 +1,24 @@
+{
+  "functions": [
+    {
+      "name": "discover_tokens",
+      "schedule": "0 * * * *",
+      "function": "discover"
+    },
+    {
+      "name": "process_token_stats",
+      "schedule": "*/15 * * * *",
+      "function": "process-stats"
+    },
+    {
+      "name": "reset_stuck_messages",
+      "schedule": "0 0 * * *",
+      "function": "read-messages",
+      "body": {
+        "queue_name": "token_stats_queue",
+        "filter": "status = 'processing' AND updated_at < now() - interval '1 hour'",
+        "batch_size": 100
+      }
+    }
+  ]
+}
