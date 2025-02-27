@@ -32,30 +32,25 @@ initQueue();
 
 // Helper functions for database operations
 async function insertToken(token) {
+  // Create a copy of the token object without the is_hot field
+  const { is_hot, ...tokenForDb } = token;
+  
   const { error } = await supabase
     .from('tokens')
-    .insert({
-      mint: token.mint,
-      start_market_cap: token.startMarketCap,
-      liquidity_usd: token.liquidityUsd,
-      market_cap_usd: token.marketCapUsd,
-      cumulative_buy_volume: token.cumulativeBuyVolume,
-      cumulative_net_volume: token.cumulativeNetVolume,
-      is_hot: token.isHot,
-      created_at: token.createdAt,
-      last_updated: token.lastUpdated,
-      deadline: token.deadline
-    });
-  
+    .insert(tokenForDb);
+
   if (error) throw error;
 }
 
 async function updateToken(mint, updates) {
+  // Create a copy of the updates object without the is_hot field
+  const { is_hot, ...updatesForDb } = updates;
+  
   const { error } = await supabase
     .from('tokens')
-    .update(updates)
+    .update(updatesForDb)
     .eq('mint', mint);
-  
+
   if (error) throw error;
 }
 
@@ -65,8 +60,26 @@ async function getToken(mint) {
     .select('*')
     .eq('mint', mint)
     .single();
-  
+
   if (error) throw error;
+  
+  // Add is_hot field with default value of false
+  if (data) {
+    data.is_hot = false;
+    
+    // Check if token is in token_hotness table
+    const { data: hotnessData, error: hotnessError } = await supabase
+      .from('token_hotness')
+      .select('*')
+      .eq('token_mint', mint)
+      .order('detected_at', { ascending: false })
+      .limit(1);
+      
+    if (!hotnessError && hotnessData && hotnessData.length > 0) {
+      data.is_hot = true;
+    }
+  }
+  
   return data;
 }
 
@@ -74,13 +87,14 @@ async function insertHistoricalRecord(record) {
   const { error } = await supabase
     .from('historical_records')
     .insert({
-      token_mint: record.tokenMint,
-      market_cap_usd: record.marketCapUsd,
-      liquidity_usd: record.liquidityUsd,
-      cumulative_buy_volume: record.cumulativeBuyVolume,
-      cumulative_net_volume: record.cumulativeNetVolume
+      token_mint: record.token_mint,
+      timestamp: record.timestamp || new Date(),
+      market_cap_usd: record.market_cap_usd,
+      liquidity_usd: record.liquidity_usd,
+      cumulative_buy_volume: record.cumulative_buy_volume,
+      cumulative_net_volume: record.cumulative_net_volume
     });
-  
+
   if (error) throw error;
 }
 
@@ -98,7 +112,7 @@ const solanaTrackerApi = axios.create({
 app.post('/discover', async (req, res) => {
   try {
     const currentTime = new Date();
-    
+
     // Call Solana Tracker search endpoint
     const response = await solanaTrackerApi.get('/search', {
       params: {
@@ -116,21 +130,28 @@ app.post('/discover', async (req, res) => {
     for (const token of discoveredTokens) {
       // Check liquidity criteria (liquidityUsd >= 0.03 × marketCapUsd)
       if (token.liquidityUsd >= 0.03 * token.marketCapUsd) {
-        const newToken = {
-          mint: token.mint,
-          startMarketCap: token.marketCapUsd,
-          liquidityUsd: token.liquidityUsd,
-          marketCapUsd: token.marketCapUsd,
-          cumulativeBuyVolume: 0, // Will be updated by worker
-          cumulativeNetVolume: 0, // Will be updated by worker
-          isHot: false,
-          createdAt: currentTime,
-          lastUpdated: currentTime,
-          deadline: new Date(currentTime.getTime() + 6 * 60 * 60 * 1000) // current time + 6 hours
-        };
-
-        // Store token in database and queue for stats fetching
         try {
+          // Get token stats to initialize volume data
+          const statsResponse = await solanaTrackerApi.get(`/stats/${token.mint}`);
+          const stats = statsResponse.data;
+          
+          const buyVolume = stats['24h']?.volume?.buys || 0;
+          const sellVolume = stats['24h']?.volume?.sells || 0;
+          
+          const newToken = {
+            mint: token.mint,
+            start_market_cap: token.marketCapUsd,
+            liquidity_usd: token.liquidityUsd,
+            market_cap_usd: token.marketCapUsd,
+            cumulative_buy_volume: buyVolume,
+            cumulative_net_volume: buyVolume - sellVolume,
+            is_hot: false, // Initially set to false
+            created_at: currentTime,
+            last_updated: currentTime,
+            deadline: new Date(currentTime.getTime() + 6 * 60 * 60 * 1000) // current time + 6 hours
+          };
+
+          // Store token in database and queue for stats fetching
           await insertToken(newToken);
           await supabase.functions.invoke('send-message', {
             body: {
@@ -174,22 +195,60 @@ app.get('/health', (req, res) => {
 });
 
 // Basic token endpoints
-app.post('/tokens', (req, res) => {
-  const token = {
-    ...req.body,
-    createdAt: new Date(),
-    lastUpdated: new Date()
-  };
-  tokens.set(token.mint, token);
-  res.status(201).json(token);
+app.post('/tokens', async (req, res) => {
+  try {
+    const token = {
+      mint: req.body.mint,
+      start_market_cap: req.body.startMarketCap || req.body.start_market_cap,
+      liquidity_usd: req.body.liquidityUsd || req.body.liquidity_usd,
+      market_cap_usd: req.body.marketCapUsd || req.body.market_cap_usd,
+      cumulative_buy_volume: req.body.cumulativeBuyVolume || req.body.cumulative_buy_volume || 0,
+      cumulative_net_volume: req.body.cumulativeNetVolume || req.body.cumulative_net_volume || 0,
+      is_hot: req.body.isHot || req.body.is_hot || false,
+      created_at: new Date(),
+      last_updated: new Date(),
+      deadline: req.body.deadline || new Date(Date.now() + 6 * 60 * 60 * 1000) // default 6 hours
+    };
+    
+    await insertToken(token);
+    res.status(201).json(token);
+  } catch (error) {
+    console.error('Error creating token:', error);
+    res.status(500).json({ error: 'Failed to create token', details: error.message });
+  }
 });
 
-app.get('/tokens/:mint', (req, res) => {
-  const token = tokens.get(req.params.mint);
-  if (!token) {
-    return res.status(404).json({ error: 'Token not found' });
+app.get('/tokens/:mint', async (req, res) => {
+  try {
+    const token = await getToken(req.params.mint);
+    if (!token) {
+      return res.status(404).json({ error: 'Token not found' });
+    }
+    res.json(token);
+  } catch (error) {
+    console.error('Error retrieving token:', error);
+    res.status(500).json({ error: 'Failed to retrieve token', details: error.message });
   }
-  res.json(token);
+});
+
+// Historical record endpoint for testing
+app.post('/historical-records', async (req, res) => {
+  try {
+    const record = {
+      token_mint: req.body.token_mint,
+      timestamp: req.body.timestamp || new Date(),
+      market_cap_usd: req.body.market_cap_usd,
+      liquidity_usd: req.body.liquidity_usd,
+      cumulative_buy_volume: req.body.cumulative_buy_volume,
+      cumulative_net_volume: req.body.cumulative_net_volume
+    };
+
+    await insertHistoricalRecord(record);
+    res.status(201).json(record);
+  } catch (error) {
+    console.error('Error creating historical record:', error);
+    res.status(500).json({ error: 'Failed to create historical record', details: error.message });
+  }
 });
 
 // Start the server
