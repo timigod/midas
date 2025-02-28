@@ -12,11 +12,13 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
+// Queue name for token stats processing
+const QUEUE_NAME = 'token_stats_queue';
+
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Initialize queue for token stats fetching
-const QUEUE_NAME = 'token_stats_queue';
 async function initQueue() {
   try {
     const { error } = await supabase.functions.invoke('create-queue', {
@@ -35,9 +37,13 @@ async function insertToken(token) {
   // Create a copy of the token object without the is_hot field
   const { is_hot, ...tokenForDb } = token;
 
+  // Use upsert instead of insert to handle duplicates
   const { error } = await supabase
     .from('tokens')
-    .insert(tokenForDb);
+    .upsert(tokenForDb, {
+      onConflict: 'mint',
+      ignoreDuplicates: false
+    });
 
   if (error) throw error;
 }
@@ -244,6 +250,20 @@ app.post('/mock-discover', async (req, res) => {
 
         // Store token in database
         await insertToken(newToken);
+        
+        // Queue token for stats processing
+        try {
+          await supabase.functions.invoke('send-message', {
+            body: {
+              queue_name: QUEUE_NAME,
+              message: { mint: token.mint }
+            }
+          });
+          console.log(`Queued token ${token.mint} for stats processing`);
+        } catch (queueError) {
+          console.error(`Failed to queue token ${token.mint}:`, queueError);
+        }
+        
         validTokens.push(newToken);
       }
     }

@@ -84,11 +84,12 @@ async function processMessage(message) {
 
 async function worker() {
   console.log('Starting worker...');
-
+  
   while (true) {
     try {
+      console.log('Checking for messages...');
       // Read messages from queue
-      const { data: messages, error } = await supabase.functions.invoke('read-messages', {
+      const { data, error } = await supabase.functions.invoke('read-messages', {
         body: {
           queue_name: QUEUE_NAME,
           batch_size: BATCH_SIZE,
@@ -96,9 +97,18 @@ async function worker() {
         }
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error reading messages:', error);
+        throw error;
+      }
 
-      if (!messages || messages.length === 0) {
+      console.log('Response from read-messages:', JSON.stringify(data));
+
+      // Extract messages from the data property
+      const messages = data?.data || [];
+      console.log(`Found ${messages.length} messages`);
+
+      if (messages.length === 0) {
         // No messages, wait before checking again
         await new Promise(resolve => setTimeout(resolve, 5000));
         continue;
