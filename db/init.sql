@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS public.tokens (
     market_cap_usd NUMERIC NOT NULL,
     cumulative_buy_volume NUMERIC DEFAULT 0,
     cumulative_net_volume NUMERIC DEFAULT 0,
+    is_hot BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_updated TIMESTAMPTZ DEFAULT NOW(),
     deadline TIMESTAMPTZ NOT NULL

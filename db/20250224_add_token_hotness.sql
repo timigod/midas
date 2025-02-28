@@ -1,9 +1,5 @@
--- Migration: Add token_hotness table and remove is_hot column
+-- Migration: Add token_hotness table
 -- Date: 2025-02-24
-
--- Drop is_hot column from tokens table
-ALTER TABLE public.tokens
-DROP COLUMN IF EXISTS is_hot;
 
 -- Create token_hotness table if it doesn't exist
 CREATE TABLE IF NOT EXISTS public.token_hotness (
