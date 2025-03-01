@@ -12,6 +12,12 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
+// Initialize Supabase service role client for admin operations
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
 // Queue name for token stats processing
 const QUEUE_NAME = 'token_stats_queue';
 
@@ -89,6 +95,57 @@ async function getToken(mint) {
   return data;
 }
 
+/**
+ * Check if a token meets the hotness criteria and mark it as hot if it does
+ * @param {Object} token - The token object with current stats
+ * @returns {boolean} - Whether the token is hot
+ */
+async function checkTokenHotness(token) {
+  try {
+    // Get the latest token data from the database
+    const { data: currentToken, error } = await supabase
+      .from('tokens')
+      .select('*')
+      .eq('mint', token.mint)
+      .single();
+
+    if (error) throw error;
+    if (!currentToken) return false;
+
+    // Hotness criteria
+    const marketCapGrowth = currentToken.market_cap_usd >= 3 * currentToken.start_market_cap;
+    const buyVolumeRatio = (currentToken.cumulative_buy_volume / currentToken.market_cap_usd) >= 0.05;
+    const positiveNetVolume = currentToken.cumulative_net_volume > 0;
+    const liquidityRatio = currentToken.liquidity_usd >= 0.03 * currentToken.market_cap_usd;
+
+    const isHot = marketCapGrowth && buyVolumeRatio && positiveNetVolume && liquidityRatio;
+
+    if (isHot) {
+      // Insert into token_hotness table using admin client to bypass RLS
+      const { error: insertError } = await supabaseAdmin
+        .from('token_hotness')
+        .insert({
+          token_mint: token.mint,
+          detected_at: new Date().toISOString(),
+          market_cap_usd: currentToken.market_cap_usd,
+          start_market_cap: currentToken.start_market_cap,
+          liquidity_usd: currentToken.liquidity_usd,
+          cumulative_buy_volume: currentToken.cumulative_buy_volume,
+          cumulative_net_volume: currentToken.cumulative_net_volume
+        });
+
+      if (insertError) throw insertError;
+      
+      console.log(`Token ${token.mint} marked as HOT! Market cap growth: ${currentToken.market_cap_usd / currentToken.start_market_cap}x, Buy volume ratio: ${currentToken.cumulative_buy_volume / currentToken.market_cap_usd}, Net volume: ${currentToken.cumulative_net_volume}, Liquidity ratio: ${currentToken.liquidity_usd / currentToken.market_cap_usd}`);
+    }
+
+    return isHot;
+  } catch (error) {
+    console.error(`Error checking hotness for token ${token.mint}:`, error);
+    return false;
+  }
+}
+
 async function insertHistoricalRecord(record) {
   const { error } = await supabase
     .from('historical_records')
@@ -158,6 +215,16 @@ app.post('/discover', async (req, res) => {
 
           // Store token in database and queue for stats fetching
           await insertToken(newToken);
+
+          // If market cap is ≥ $600K, perform immediate hotness check
+          let isHot = false;
+          if (token.marketCapUsd >= 600000) {
+            console.log(`Token ${token.mint} has market cap ≥ $600K (${token.marketCapUsd}), performing immediate hotness check`);
+            isHot = await checkTokenHotness(newToken);
+            if (isHot) {
+              newToken.is_hot = true;
+            }
+          }
 
           await supabase.functions.invoke('send-message', {
             body: {
@@ -250,7 +317,76 @@ app.post('/mock-discover', async (req, res) => {
 
         // Store token in database
         await insertToken(newToken);
-        
+
+        // If market cap is ≥ $600K, perform immediate hotness check
+        let isHot = false;
+        if (token.marketCapUsd >= 600000) {
+          console.log(`Mock token ${token.mint} has market cap ≥ $600K (${token.marketCapUsd}), performing immediate hotness check`);
+          
+          // For mock tokens, we'll simulate growth to test the hotness check
+          if (token.mint === 'mock3333333333333333333333333333333333333333') {
+            // Update the token to simulate growth for testing
+            await updateToken(token.mint, {
+              market_cap_usd: token.marketCapUsd * 4, // 4x growth
+              liquidity_usd: token.marketCapUsd * 0.15, // 15% of market cap (> 3% required)
+              cumulative_buy_volume: token.marketCapUsd * 0.25, // 25% of market cap (> 5% required)
+              cumulative_net_volume: token.marketCapUsd * 0.1 // positive net volume
+            });
+            
+            // Get the updated token data
+            const { data: updatedToken, error: getError } = await supabase
+              .from('tokens')
+              .select('*')
+              .eq('mint', token.mint)
+              .single();
+              
+            if (!getError && updatedToken) {
+              // Log the token data to debug
+              console.log('Updated token data for hotness check:', JSON.stringify(updatedToken));
+              
+              // Manually check hotness criteria
+              const marketCapGrowth = updatedToken.market_cap_usd >= 3 * updatedToken.start_market_cap;
+              const buyVolumeRatio = (updatedToken.cumulative_buy_volume / updatedToken.market_cap_usd) >= 0.05;
+              const positiveNetVolume = updatedToken.cumulative_net_volume > 0;
+              const liquidityRatio = updatedToken.liquidity_usd >= 0.03 * updatedToken.market_cap_usd;
+              
+              console.log(`Hotness check: marketCapGrowth=${marketCapGrowth}, buyVolumeRatio=${buyVolumeRatio}, positiveNetVolume=${positiveNetVolume}, liquidityRatio=${liquidityRatio}`);
+              
+              isHot = marketCapGrowth && buyVolumeRatio && positiveNetVolume && liquidityRatio;
+              
+              if (isHot) {
+                // Insert into token_hotness table using admin client to bypass RLS
+                const { error: insertError } = await supabaseAdmin
+                  .from('token_hotness')
+                  .insert({
+                    token_mint: token.mint,
+                    detected_at: new Date().toISOString(),
+                    market_cap_usd: updatedToken.market_cap_usd,
+                    start_market_cap: updatedToken.start_market_cap,
+                    liquidity_usd: updatedToken.liquidity_usd,
+                    cumulative_buy_volume: updatedToken.cumulative_buy_volume,
+                    cumulative_net_volume: updatedToken.cumulative_net_volume
+                  });
+                  
+                if (insertError) {
+                  console.error(`Error inserting into token_hotness:`, insertError);
+                } else {
+                  console.log(`Token ${token.mint} marked as HOT!`);
+                  newToken.is_hot = true;
+                }
+              }
+            } else {
+              console.error(`Error getting updated token:`, getError);
+            }
+          } else {
+            // For other tokens, just check without simulating growth
+            isHot = await checkTokenHotness(newToken);
+            if (isHot) {
+              newToken.is_hot = true;
+            }
+          }
+        }
+
         // Queue token for stats processing
         try {
           await supabase.functions.invoke('send-message', {
@@ -263,7 +399,7 @@ app.post('/mock-discover', async (req, res) => {
         } catch (queueError) {
           console.error(`Failed to queue token ${token.mint}:`, queueError);
         }
-        
+
         validTokens.push(newToken);
       }
     }

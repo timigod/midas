@@ -10,6 +10,12 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
+// Initialize Supabase service role client for admin operations
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
 // Configure Solana Tracker API client
 const solanaTrackerApi = axios.create({
   baseURL: process.env.SOLANA_TRACKER_API_URL,
@@ -67,6 +73,33 @@ async function processMessage(message) {
         });
 
       if (historyError) throw historyError;
+      
+      // Check if token meets hotness criteria
+      const marketCapGrowth = token.market_cap_usd >= 3 * token.start_market_cap;
+      const buyVolumeRatio = (updates.cumulative_buy_volume / token.market_cap_usd) >= 0.05;
+      const positiveNetVolume = updates.cumulative_net_volume > 0;
+      const liquidityRatio = token.liquidity_usd >= 0.03 * token.market_cap_usd;
+
+      const isHot = marketCapGrowth && buyVolumeRatio && positiveNetVolume && liquidityRatio;
+
+      if (isHot) {
+        // Insert into token_hotness table using admin client to bypass RLS
+        const { error: hotnessError } = await supabaseAdmin
+          .from('token_hotness')
+          .insert({
+            token_mint: mint,
+            detected_at: new Date().toISOString(),
+            market_cap_usd: token.market_cap_usd,
+            start_market_cap: token.start_market_cap,
+            liquidity_usd: token.liquidity_usd,
+            cumulative_buy_volume: updates.cumulative_buy_volume,
+            cumulative_net_volume: updates.cumulative_net_volume
+          });
+
+        if (hotnessError) throw hotnessError;
+        
+        console.log(`Token ${mint} marked as HOT! Market cap growth: ${token.market_cap_usd / token.start_market_cap}x, Buy volume ratio: ${updates.cumulative_buy_volume / token.market_cap_usd}, Net volume: ${updates.cumulative_net_volume}, Liquidity ratio: ${token.liquidity_usd / token.market_cap_usd}`);
+      }
       
       console.log(`Updated stats for token ${mint}`);
     }
