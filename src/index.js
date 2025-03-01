@@ -504,6 +504,30 @@ app.get('/active-tokens', async (req, res) => {
   }
 });
 
+// Get all hot tokens endpoint
+app.get('/hot-tokens', async (req, res) => {
+  try {
+    const { data: tokens, error } = await supabase
+      .from('tokens')
+      .select('*')
+      .eq('is_active', true)
+      .eq('is_hot', true);
+      
+    if (error) throw error;
+    
+    res.json({
+      count: tokens.length,
+      tokens
+    });
+  } catch (error) {
+    console.error('Error fetching hot tokens:', error);
+    res.status(500).json({
+      error: 'Failed to fetch hot tokens',
+      details: error.message
+    });
+  }
+});
+
 // Get all archived tokens endpoint
 app.get('/archived-tokens', async (req, res) => {
   try {
