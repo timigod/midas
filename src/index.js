@@ -96,6 +96,56 @@ async function getToken(mint) {
 }
 
 /**
+ * Archive tokens that have passed their deadline and haven't become hot
+ * @returns {Promise<{archivedCount: number, archivedTokens: Array, errors: Array}>} - Count of archived tokens and any errors
+ */
+async function archiveExpiredTokens() {
+  const currentTime = new Date().toISOString();
+  const archivedTokens = [];
+  const errors = [];
+  
+  // Get tokens that have passed their deadline and aren't hot
+  const { data: expiredTokens, error: fetchError } = await supabase
+    .from('tokens')
+    .select('*')
+    .lt('deadline', currentTime)
+    .eq('is_hot', false)
+    .eq('is_active', true); // Only get active tokens
+    
+  if (fetchError) {
+    console.error('Error fetching expired tokens:', fetchError);
+    errors.push(fetchError.message);
+    return { archivedCount: 0, archivedTokens: [], errors };
+  }
+  
+  console.log(`Found ${expiredTokens?.length || 0} expired tokens to archive`);
+  
+  // Archive each expired token
+  for (const token of (expiredTokens || [])) {
+    try {
+      // Call the archive_token function we created in Supabase
+      const { error: rpcError } = await supabase.rpc('archive_token', {
+        token_mint_param: token.mint
+      });
+      
+      if (rpcError) {
+        console.error(`Error archiving token ${token.mint}:`, rpcError);
+        errors.push(`Failed to archive token ${token.mint}: ${rpcError.message}`);
+        continue;
+      }
+      
+      archivedTokens.push(token.mint);
+      console.log(`Archived token ${token.mint} (deadline passed, not hot)`);
+    } catch (error) {
+      console.error(`Error processing token ${token.mint}:`, error);
+      errors.push(`Error processing token ${token.mint}: ${error.message}`);
+    }
+  }
+  
+  return { archivedCount: archivedTokens.length, archivedTokens, errors };
+}
+
+/**
  * Check if a token meets the hotness criteria and mark it as hot if it does
  * @param {Object} token - The token object with current stats
  * @returns {boolean} - Whether the token is hot
@@ -431,16 +481,90 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Get all active tokens endpoint
+app.get('/active-tokens', async (req, res) => {
+  try {
+    const { data: tokens, error } = await supabase
+      .from('tokens')
+      .select('*')
+      .eq('is_active', true);
+      
+    if (error) throw error;
+    
+    res.json({
+      count: tokens.length,
+      tokens
+    });
+  } catch (error) {
+    console.error('Error fetching active tokens:', error);
+    res.status(500).json({
+      error: 'Failed to fetch active tokens',
+      details: error.message
+    });
+  }
+});
+
+// Get all archived tokens endpoint
+app.get('/archived-tokens', async (req, res) => {
+  try {
+    const { data: archivedTokens, error } = await supabase
+      .from('archived_tokens')
+      .select('*');
+      
+    if (error) throw error;
+    
+    res.json({
+      count: archivedTokens.length,
+      archivedTokens
+    });
+  } catch (error) {
+    console.error('Error fetching archived tokens:', error);
+    res.status(500).json({
+      error: 'Failed to fetch archived tokens',
+      details: error.message
+    });
+  }
+});
+
+// Archive expired tokens endpoint
+app.post('/archive-expired', async (req, res) => {
+  try {
+    console.log('Starting expired token archiving process');
+    
+    const { archivedCount, archivedTokens, errors } = await archiveExpiredTokens();
+    
+    res.json({
+      message: `Archived ${archivedCount} expired tokens that didn't become hot`,
+      archivedTokens,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Error in archiving process:', error);
+    res.status(500).json({
+      error: 'Failed to archive expired tokens',
+      details: error.message
+    });
+  }
+});
+
 // Monitoring endpoint for 30-minute updates
 app.post('/monitor', async (req, res) => {
   try {
     console.log('Starting 30-minute monitoring update');
     
-    // Get all active tokens
+    // First, archive any expired tokens
+    console.log('Checking for expired tokens to archive...');
+    const { archivedCount, archivedTokens } = await archiveExpiredTokens();
+    if (archivedCount > 0) {
+      console.log(`Archived ${archivedCount} expired tokens that didn't become hot`);
+    }
+    
+    // Get all active tokens (not past deadline and marked as active)
     const { data: tokens, error: tokensError } = await supabase
       .from('tokens')
       .select('*')
-      .gt('deadline', new Date().toISOString()); // Only monitor tokens that haven't reached their deadline
+      .gt('deadline', new Date().toISOString()) // Only monitor tokens that haven't reached their deadline
+      .eq('is_active', true); // Only get active tokens
     
     if (tokensError) throw tokensError;
     
@@ -595,10 +719,18 @@ app.post('/mock-monitor', async (req, res) => {
   try {
     console.log('Starting mock 30-minute monitoring update');
     
-    // Get all tokens (for testing, we don't filter by deadline)
+    // First, archive any expired tokens
+    console.log('Checking for expired tokens to archive...');
+    const { archivedCount, archivedTokens } = await archiveExpiredTokens();
+    if (archivedCount > 0) {
+      console.log(`Archived ${archivedCount} expired tokens that didn't become hot`);
+    }
+    
+    // Get all active tokens
     const { data: tokens, error: tokensError } = await supabase
       .from('tokens')
-      .select('*');
+      .select('*')
+      .eq('is_active', true); // Only get active tokens
     
     if (tokensError) throw tokensError;
     
