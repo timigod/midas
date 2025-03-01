@@ -454,6 +454,7 @@ app.post('/monitor', async (req, res) => {
     console.log(`Found ${tokens.length} active tokens for monitoring`);
     
     const updatedTokens = [];
+    const hotTokens = [];
     const errors = [];
     
     // Process each token
@@ -479,6 +480,53 @@ app.post('/monitor', async (req, res) => {
           cumulative_net_volume: newCumulativeNetVolume,
           last_updated: new Date().toISOString()
         };
+        
+        // Check if token's market cap has crossed $600K threshold
+        const marketCapCrossedThreshold = updates.market_cap_usd >= 600000 && (token.market_cap_usd < 600000 || token.is_hot === false);
+        
+        if (marketCapCrossedThreshold) {
+          console.log(`Token ${token.mint} market cap has crossed $600K threshold (${updates.market_cap_usd}), performing hotness check`);
+          
+          // Perform hotness check
+          const marketCapGrowth = updates.market_cap_usd >= 3 * token.start_market_cap;
+          const buyVolumeRatio = updates.cumulative_buy_volume / updates.market_cap_usd >= 0.05;
+          const positiveNetVolume = updates.cumulative_net_volume > 0;
+          const liquidityRatio = updates.liquidity_usd >= 0.03 * updates.market_cap_usd;
+          
+          console.log(`Hotness check: marketCapGrowth=${marketCapGrowth}, buyVolumeRatio=${buyVolumeRatio}, positiveNetVolume=${positiveNetVolume}, liquidityRatio=${liquidityRatio}`);
+          
+          const isHot = marketCapGrowth && buyVolumeRatio && positiveNetVolume && liquidityRatio;
+          
+          if (isHot) {
+            console.log(`Token ${token.mint} marked as HOT!`);
+            updates.is_hot = true;
+            
+            // Add to hot tokens list
+            hotTokens.push({
+              mint: token.mint,
+              marketCapUsd: updates.market_cap_usd,
+              startMarketCap: token.start_market_cap,
+              liquidityUsd: updates.liquidity_usd,
+              cumulativeBuyVolume: updates.cumulative_buy_volume,
+              cumulativeNetVolume: updates.cumulative_net_volume
+            });
+            
+            // Insert into token_hotness table
+            const { error: insertError } = await supabaseAdmin.from('token_hotness').insert({
+              token_mint: token.mint,
+              detected_at: new Date().toISOString(),
+              market_cap_usd: updates.market_cap_usd,
+              start_market_cap: token.start_market_cap,
+              liquidity_usd: updates.liquidity_usd,
+              cumulative_buy_volume: updates.cumulative_buy_volume,
+              cumulative_net_volume: updates.cumulative_net_volume
+            });
+            
+            if (insertError) {
+              console.error(`Error inserting token hotness record: ${insertError.message}`);
+            }
+          }
+        }
         
         // Update token in database
         const { error: updateError } = await supabase
@@ -527,8 +575,9 @@ app.post('/monitor', async (req, res) => {
     }
     
     res.json({
-      message: `Monitoring update completed. Updated ${updatedTokens.length} tokens.`,
+      message: `Monitoring update completed. Updated ${updatedTokens.length} tokens. ${hotTokens.length} tokens became hot.`,
       updatedTokens,
+      hotTokens: hotTokens.length > 0 ? hotTokens : undefined,
       errors: errors.length > 0 ? errors : undefined
     });
   } catch (error) {
@@ -542,6 +591,7 @@ app.post('/monitor', async (req, res) => {
 
 // Mock monitoring endpoint for testing
 app.post('/mock-monitor', async (req, res) => {
+  const { forceMarketCap } = req.body || {};
   try {
     console.log('Starting mock 30-minute monitoring update');
     
@@ -562,6 +612,7 @@ app.post('/mock-monitor', async (req, res) => {
     console.log(`Found ${tokens.length} tokens for mock monitoring`);
     
     const updatedTokens = [];
+    const hotTokens = [];
     const errors = [];
     
     // Process each token
@@ -576,7 +627,13 @@ app.post('/mock-monitor', async (req, res) => {
         const newCumulativeNetVolume = (token.cumulative_net_volume || 0) + (thirtyMinBuys - thirtyMinSells);
         
         // Generate mock market cap and liquidity changes (±10%)
-        const marketCapChange = token.market_cap_usd * (0.9 + Math.random() * 0.2); // ±10%
+        let marketCapChange;
+        if (forceMarketCap && forceMarketCap[token.mint]) {
+          console.log(`Forcing market cap for ${token.mint} to ${forceMarketCap[token.mint]}`);
+          marketCapChange = forceMarketCap[token.mint];
+        } else {
+          marketCapChange = token.market_cap_usd * (0.9 + Math.random() * 0.2); // ±10%
+        }
         const liquidityChange = token.liquidity_usd * (0.9 + Math.random() * 0.2); // ±10%
         
         // Update token metrics
@@ -587,6 +644,53 @@ app.post('/mock-monitor', async (req, res) => {
           cumulative_net_volume: newCumulativeNetVolume,
           last_updated: new Date().toISOString()
         };
+        
+        // Check if token's market cap has crossed $600K threshold
+        const marketCapCrossedThreshold = updates.market_cap_usd >= 600000 && (token.market_cap_usd < 600000 || token.is_hot === false);
+        
+        if (marketCapCrossedThreshold) {
+          console.log(`Token ${token.mint} market cap has crossed $600K threshold (${updates.market_cap_usd}), performing hotness check`);
+          
+          // Perform hotness check
+          const marketCapGrowth = updates.market_cap_usd >= 3 * token.start_market_cap;
+          const buyVolumeRatio = updates.cumulative_buy_volume / updates.market_cap_usd >= 0.05;
+          const positiveNetVolume = updates.cumulative_net_volume > 0;
+          const liquidityRatio = updates.liquidity_usd >= 0.03 * updates.market_cap_usd;
+          
+          console.log(`Hotness check: marketCapGrowth=${marketCapGrowth}, buyVolumeRatio=${buyVolumeRatio}, positiveNetVolume=${positiveNetVolume}, liquidityRatio=${liquidityRatio}`);
+          
+          const isHot = marketCapGrowth && buyVolumeRatio && positiveNetVolume && liquidityRatio;
+          
+          if (isHot) {
+            console.log(`Token ${token.mint} marked as HOT!`);
+            updates.is_hot = true;
+            
+            // Add to hot tokens list
+            hotTokens.push({
+              mint: token.mint,
+              marketCapUsd: updates.market_cap_usd,
+              startMarketCap: token.start_market_cap,
+              liquidityUsd: updates.liquidity_usd,
+              cumulativeBuyVolume: updates.cumulative_buy_volume,
+              cumulativeNetVolume: updates.cumulative_net_volume
+            });
+            
+            // Insert into token_hotness table
+            const { error: insertError } = await supabaseAdmin.from('token_hotness').insert({
+              token_mint: token.mint,
+              detected_at: new Date().toISOString(),
+              market_cap_usd: updates.market_cap_usd,
+              start_market_cap: token.start_market_cap,
+              liquidity_usd: updates.liquidity_usd,
+              cumulative_buy_volume: updates.cumulative_buy_volume,
+              cumulative_net_volume: updates.cumulative_net_volume
+            });
+            
+            if (insertError) {
+              console.error(`Error inserting token hotness record: ${insertError.message}`);
+            }
+          }
+        }
         
         // Update token in database
         const { error: updateError } = await supabase
@@ -635,8 +739,9 @@ app.post('/mock-monitor', async (req, res) => {
     }
     
     res.json({
-      message: `Mock monitoring update completed. Updated ${updatedTokens.length} tokens.`,
+      message: `Mock monitoring update completed. Updated ${updatedTokens.length} tokens. ${hotTokens.length} tokens became hot.`,
       updatedTokens,
+      hotTokens: hotTokens.length > 0 ? hotTokens : undefined,
       errors: errors.length > 0 ? errors : undefined
     });
   } catch (error) {
