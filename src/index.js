@@ -431,6 +431,223 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Monitoring endpoint for 30-minute updates
+app.post('/monitor', async (req, res) => {
+  try {
+    console.log('Starting 30-minute monitoring update');
+    
+    // Get all active tokens
+    const { data: tokens, error: tokensError } = await supabase
+      .from('tokens')
+      .select('*')
+      .gt('deadline', new Date().toISOString()); // Only monitor tokens that haven't reached their deadline
+    
+    if (tokensError) throw tokensError;
+    
+    if (!tokens || tokens.length === 0) {
+      return res.json({
+        message: 'No active tokens found for monitoring',
+        updatedCount: 0
+      });
+    }
+    
+    console.log(`Found ${tokens.length} active tokens for monitoring`);
+    
+    const updatedTokens = [];
+    const errors = [];
+    
+    // Process each token
+    for (const token of tokens) {
+      try {
+        // Fetch current market cap and liquidity
+        const statsResponse = await solanaTrackerApi.get(`/stats/${token.mint}`);
+        const stats = statsResponse.data;
+        
+        // Extract 30-minute volume stats
+        const thirtyMinBuys = stats['30m']?.volume?.buys || 0;
+        const thirtyMinSells = stats['30m']?.volume?.sells || 0;
+        
+        // Calculate new cumulative volumes
+        const newCumulativeBuyVolume = (token.cumulative_buy_volume || 0) + thirtyMinBuys;
+        const newCumulativeNetVolume = (token.cumulative_net_volume || 0) + (thirtyMinBuys - thirtyMinSells);
+        
+        // Update token metrics
+        const updates = {
+          market_cap_usd: stats.marketCap?.usd || token.market_cap_usd,
+          liquidity_usd: stats.liquidity?.usd || token.liquidity_usd,
+          cumulative_buy_volume: newCumulativeBuyVolume,
+          cumulative_net_volume: newCumulativeNetVolume,
+          last_updated: new Date().toISOString()
+        };
+        
+        // Update token in database
+        const { error: updateError } = await supabase
+          .from('tokens')
+          .update(updates)
+          .eq('mint', token.mint);
+        
+        if (updateError) throw updateError;
+        
+        // Insert historical record
+        const historicalRecord = {
+          token_mint: token.mint,
+          market_cap_usd: updates.market_cap_usd,
+          liquidity_usd: updates.liquidity_usd,
+          cumulative_buy_volume: updates.cumulative_buy_volume,
+          cumulative_net_volume: updates.cumulative_net_volume,
+          timestamp: updates.last_updated
+        };
+        
+        await insertHistoricalRecord(historicalRecord);
+        
+        console.log(`Updated token ${token.mint} with new metrics`);
+        console.log(`  Market Cap: $${updates.market_cap_usd}`);
+        console.log(`  Liquidity: $${updates.liquidity_usd}`);
+        console.log(`  30m Buy Volume: $${thirtyMinBuys}`);
+        console.log(`  30m Sell Volume: $${thirtyMinSells}`);
+        console.log(`  New Cumulative Buy Volume: $${updates.cumulative_buy_volume}`);
+        console.log(`  New Cumulative Net Volume: $${updates.cumulative_net_volume}`);
+        
+        updatedTokens.push({
+          mint: token.mint,
+          marketCapUsd: updates.market_cap_usd,
+          liquidityUsd: updates.liquidity_usd,
+          thirtyMinBuyVolume: thirtyMinBuys,
+          thirtyMinSellVolume: thirtyMinSells,
+          cumulativeBuyVolume: updates.cumulative_buy_volume,
+          cumulativeNetVolume: updates.cumulative_net_volume
+        });
+      } catch (tokenError) {
+        console.error(`Error updating token ${token.mint}:`, tokenError);
+        errors.push({
+          mint: token.mint,
+          error: tokenError.message || 'Unknown error'
+        });
+      }
+    }
+    
+    res.json({
+      message: `Monitoring update completed. Updated ${updatedTokens.length} tokens.`,
+      updatedTokens,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Monitoring error:', error);
+    res.status(500).json({
+      error: 'Failed to perform monitoring update',
+      details: error.message
+    });
+  }
+});
+
+// Mock monitoring endpoint for testing
+app.post('/mock-monitor', async (req, res) => {
+  try {
+    console.log('Starting mock 30-minute monitoring update');
+    
+    // Get all tokens (for testing, we don't filter by deadline)
+    const { data: tokens, error: tokensError } = await supabase
+      .from('tokens')
+      .select('*');
+    
+    if (tokensError) throw tokensError;
+    
+    if (!tokens || tokens.length === 0) {
+      return res.json({
+        message: 'No tokens found for mock monitoring',
+        updatedCount: 0
+      });
+    }
+    
+    console.log(`Found ${tokens.length} tokens for mock monitoring`);
+    
+    const updatedTokens = [];
+    const errors = [];
+    
+    // Process each token
+    for (const token of tokens) {
+      try {
+        // Generate mock 30-minute volume stats
+        const thirtyMinBuys = Math.floor(Math.random() * 50000) + 10000; // Random value between 10K and 60K
+        const thirtyMinSells = Math.floor(Math.random() * 40000) + 5000; // Random value between 5K and 45K
+        
+        // Calculate new cumulative volumes
+        const newCumulativeBuyVolume = (token.cumulative_buy_volume || 0) + thirtyMinBuys;
+        const newCumulativeNetVolume = (token.cumulative_net_volume || 0) + (thirtyMinBuys - thirtyMinSells);
+        
+        // Generate mock market cap and liquidity changes (±10%)
+        const marketCapChange = token.market_cap_usd * (0.9 + Math.random() * 0.2); // ±10%
+        const liquidityChange = token.liquidity_usd * (0.9 + Math.random() * 0.2); // ±10%
+        
+        // Update token metrics
+        const updates = {
+          market_cap_usd: marketCapChange,
+          liquidity_usd: liquidityChange,
+          cumulative_buy_volume: newCumulativeBuyVolume,
+          cumulative_net_volume: newCumulativeNetVolume,
+          last_updated: new Date().toISOString()
+        };
+        
+        // Update token in database
+        const { error: updateError } = await supabase
+          .from('tokens')
+          .update(updates)
+          .eq('mint', token.mint);
+        
+        if (updateError) throw updateError;
+        
+        // Insert historical record
+        const historicalRecord = {
+          token_mint: token.mint,
+          market_cap_usd: updates.market_cap_usd,
+          liquidity_usd: updates.liquidity_usd,
+          cumulative_buy_volume: updates.cumulative_buy_volume,
+          cumulative_net_volume: updates.cumulative_net_volume,
+          timestamp: updates.last_updated
+        };
+        
+        await insertHistoricalRecord(historicalRecord);
+        
+        console.log(`Updated token ${token.mint} with mock metrics`);
+        console.log(`  Market Cap: $${updates.market_cap_usd.toFixed(2)}`);
+        console.log(`  Liquidity: $${updates.liquidity_usd.toFixed(2)}`);
+        console.log(`  30m Buy Volume: $${thirtyMinBuys}`);
+        console.log(`  30m Sell Volume: $${thirtyMinSells}`);
+        console.log(`  New Cumulative Buy Volume: $${updates.cumulative_buy_volume}`);
+        console.log(`  New Cumulative Net Volume: $${updates.cumulative_net_volume}`);
+        
+        updatedTokens.push({
+          mint: token.mint,
+          marketCapUsd: updates.market_cap_usd,
+          liquidityUsd: updates.liquidity_usd,
+          thirtyMinBuyVolume: thirtyMinBuys,
+          thirtyMinSellVolume: thirtyMinSells,
+          cumulativeBuyVolume: updates.cumulative_buy_volume,
+          cumulativeNetVolume: updates.cumulative_net_volume
+        });
+      } catch (tokenError) {
+        console.error(`Error updating token ${token.mint}:`, tokenError);
+        errors.push({
+          mint: token.mint,
+          error: tokenError.message || 'Unknown error'
+        });
+      }
+    }
+    
+    res.json({
+      message: `Mock monitoring update completed. Updated ${updatedTokens.length} tokens.`,
+      updatedTokens,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Mock monitoring error:', error);
+    res.status(500).json({
+      error: 'Failed to perform mock monitoring update',
+      details: error.message
+    });
+  }
+});
+
 // Basic token endpoints
 app.post('/tokens', async (req, res) => {
   try {
@@ -484,6 +701,37 @@ app.post('/historical-records', async (req, res) => {
   } catch (error) {
     console.error('Error creating historical record:', error);
     res.status(500).json({ error: 'Failed to create historical record', details: error.message });
+  }
+});
+
+// Get historical records for a token
+app.get('/tokens/:mint/history', async (req, res) => {
+  try {
+    const { mint } = req.params;
+    
+    // Get token to verify it exists
+    const token = await getToken(mint);
+    if (!token) {
+      return res.status(404).json({ error: 'Token not found' });
+    }
+    
+    // Get historical records for the token
+    const { data: records, error } = await supabase
+      .from('historical_records')
+      .select('*')
+      .eq('token_mint', mint)
+      .order('timestamp', { ascending: false });
+    
+    if (error) throw error;
+    
+    res.json({
+      mint,
+      recordCount: records.length,
+      records
+    });
+  } catch (error) {
+    console.error('Error retrieving historical records:', error);
+    res.status(500).json({ error: 'Failed to retrieve historical records', details: error.message });
   }
 });
 
