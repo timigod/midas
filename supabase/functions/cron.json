@@ -6,9 +6,19 @@
       "function": "discover"
     },
     {
+      "name": "monitor_tokens",
+      "schedule": "*/30 * * * *",
+      "function": "monitor"
+    },
+    {
       "name": "process_token_stats",
       "schedule": "*/15 * * * *",
       "function": "process-stats"
+    },
+    {
+      "name": "archive_expired_tokens",
+      "schedule": "*/60 * * * *",
+      "function": "archive-expired"
     },
     {
       "name": "reset_stuck_messages",
