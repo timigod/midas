@@ -166,21 +166,54 @@ Deno.serve(async (req) => {
         }
 
         // Queue token for stats processing with retry metadata
-        const { error: queueError } = await supabase
-          .functions.invoke('send-message', {
-            body: {
-              queue_name: QUEUE_NAME,
-              message: {
-                mint: token.mint,
-                retryCount: 0,
-                lastRetry: null,
-                nextRetryTime: null
+        let queueRetries = 0;
+        const MAX_QUEUE_RETRIES = 3;
+        let queueSuccess = false;
+        
+        while (!queueSuccess && queueRetries < MAX_QUEUE_RETRIES) {
+          try {
+            const { error: queueError } = await supabase
+              .functions.invoke('send-message', {
+                body: {
+                  queue_name: QUEUE_NAME,
+                  message: {
+                    mint: token.mint,
+                    retryCount: 0,
+                    lastRetry: null,
+                    nextRetryTime: null
+                  }
+                }
+              });
+    
+            if (queueError) {
+              queueRetries++;
+              console.error(`Failed to queue token ${token.mint} for processing (attempt ${queueRetries}/${MAX_QUEUE_RETRIES}):`, queueError);
+              
+              if (queueRetries < MAX_QUEUE_RETRIES) {
+                // Wait before retrying (exponential backoff)
+                const backoffMs = Math.min(1000 * Math.pow(2, queueRetries), 8000);
+                console.log(`Retrying in ${backoffMs}ms...`);
+                await new Promise(resolve => setTimeout(resolve, backoffMs));
               }
+            } else {
+              queueSuccess = true;
+              console.log(`Successfully queued token ${token.mint} for processing`);
             }
-          })
-
-        if (queueError) {
-          console.error(`Failed to queue token ${token.mint} for processing:`, queueError);
+          } catch (error) {
+            queueRetries++;
+            console.error(`Exception when queuing token ${token.mint} (attempt ${queueRetries}/${MAX_QUEUE_RETRIES}):`, error);
+            
+            if (queueRetries < MAX_QUEUE_RETRIES) {
+              // Wait before retrying (exponential backoff)
+              const backoffMs = Math.min(1000 * Math.pow(2, queueRetries), 8000);
+              console.log(`Retrying in ${backoffMs}ms...`);
+              await new Promise(resolve => setTimeout(resolve, backoffMs));
+            }
+          }
+        }
+        
+        if (!queueSuccess) {
+          console.error(`Failed to queue token ${token.mint} after ${MAX_QUEUE_RETRIES} attempts. Token will not be processed for stats.`);
         }
 
         validTokens.push(newToken)

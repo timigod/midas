@@ -123,8 +123,8 @@ Deno.serve(async (req) => {
       const response = await supabase.functions.invoke('read-messages', {
         body: {
           queue_name: QUEUE_NAME,
-          batch_size: 1,
-          visibility_timeout: 60,
+          batch_size: 50,
+          visibility_timeout: 120,
           // Only get messages that are ready to be retried
           filter: `nextRetryTime IS NULL OR nextRetryTime <= '${currentTime}'`
         }
@@ -133,24 +133,49 @@ Deno.serve(async (req) => {
       messages = response.data;
       readError = response.error;
       
-      console.log(`Read messages response:`, response);
+      console.log(`Read messages response: ${messages ? messages.length : 0} messages found`);
     } catch (invokeError) {
       console.error(`Error invoking read-messages function:`, invokeError);
-      throw new Error(`Failed to invoke read-messages: ${invokeError.message}`);
+      return new Response(
+        JSON.stringify({ 
+          error: `Failed to invoke read-messages: ${invokeError.message}`,
+          timestamp: new Date().toISOString()
+        }),
+        { headers: { 'Content-Type': 'application/json' }, status: 500 }
+      );
     }
 
-    if (readError) throw readError
+    if (readError) {
+      console.error(`Read error from queue:`, readError);
+      return new Response(
+        JSON.stringify({ 
+          error: `Queue read error: ${JSON.stringify(readError)}`,
+          timestamp: new Date().toISOString()
+        }),
+        { headers: { 'Content-Type': 'application/json' }, status: 500 }
+      );
+    }
     if (!messages || messages.length === 0) {
       return new Response(
-        JSON.stringify({ message: 'No messages to process' }),
+        JSON.stringify({ 
+          message: 'No messages to process',
+          timestamp: currentTime
+        }),
         { headers: { 'Content-Type': 'application/json' }, status: 200 }
       )
     }
 
     // Process each message
+    console.log(`Processing ${messages.length} messages from the queue`);
+    
+    let successCount = 0;
+    let failureCount = 0;
+    
     for (const message of messages) {
       const queueMessage = message.message as QueueMessage
       const { mint, retryCount } = queueMessage
+      
+      console.log(`Processing token ${mint} (retry count: ${retryCount})`);
 
       try {
         // Get token stats
@@ -178,8 +203,14 @@ Deno.serve(async (req) => {
           .eq('mint', mint)
           .single()
 
-        if (getError) throw getError
-        if (!token) throw new Error(`Token ${mint} not found`)
+        if (getError) {
+          console.error(`Error retrieving token ${mint} from database:`, getError);
+          throw new Error(`Database error: ${getError.message}`);
+        }
+        if (!token) {
+          console.error(`Token ${mint} not found in database`);
+          throw new Error(`Token ${mint} not found`);
+        }
 
         // Validate the stats data structure before processing
         console.log(`Validating stats data for token ${mint}`);
@@ -284,7 +315,13 @@ Deno.serve(async (req) => {
           .update(updates)
           .eq('mint', mint)
 
-        if (updateError) throw updateError
+        if (updateError) {
+          console.error(`Failed to update token ${mint}:`, updateError);
+          throw new Error(`Database update error: ${updateError.message}`);
+        } else {
+          console.log(`Successfully updated token ${mint} with new stats`);
+          successCount++;
+        }
 
         // Add historical record - only if we have valid market cap and liquidity values
         if (updates.market_cap_usd !== null && updates.market_cap_usd !== undefined && 
@@ -329,28 +366,16 @@ Deno.serve(async (req) => {
           // Don't throw here, just log the error and continue
         }
 
-        return new Response(
-          JSON.stringify({
-            message: `Successfully processed stats for token ${mint}`,
-            updates,
-            token: {
-              mint,
-              marketCapUsd: updates.market_cap_usd,
-              liquidityUsd: updates.liquidity_usd,
-              cumulativeBuyVolume: updates.cumulative_buy_volume,
-              cumulativeNetVolume: updates.cumulative_net_volume,
-              startMarketCap: token.start_market_cap
-            }
-          }),
-          { headers: { 'Content-Type': 'application/json' }, status: 200 }
-        )
+        // Success for this token, handled via the successCount++ above
       } catch (error) {
-        console.error(`Failed to process token ${mint}:`, error)
+        console.error(`Failed to process token ${mint}:`, error);
+        failureCount++;
 
         // Handle rate limits and other retryable errors
         const shouldRetry = error.message === 'Rate limited' || 
                           error.message.includes('timeout') || 
-                          error.message.includes('network error');
+                          error.message.includes('network error') ||
+                          error.message.includes('fetch');
 
         if (shouldRetry && retryCount < RETRY_CONFIG.MAX_RETRIES) {
           // Update message with retry information
@@ -455,11 +480,29 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({
         error: 'Failed to process messages',
-        details: error
+        details: error.message || String(error),
+        timestamp: new Date().toISOString()
       }),
       { headers: { 'Content-Type': 'application/json' }, status: 500 }
     )
   }
+
+  // Return summary of processing results
+  console.log(`Process stats summary: ${successCount} succeeded, ${failureCount} failed`);
+  return new Response(
+    JSON.stringify({
+      message: `Processed stats for ${messages.length} tokens`,
+      summary: {
+        total: messages.length,
+        success: successCount,
+        failure: failureCount,
+        startTime: currentTime,
+        endTime: new Date().toISOString(),
+        executionTimeMs: new Date().getTime() - new Date(currentTime).getTime()
+      }
+    }),
+    { headers: { 'Content-Type': 'application/json' }, status: 200 }
+  )
 })
 
 /* To invoke locally:
