@@ -466,13 +466,8 @@ Deno.serve(async (req) => {
           }
         }
 
-        return new Response(
-          JSON.stringify({
-            error: `Failed to process token ${mint}`,
-            details: error
-          }),
-          { headers: { 'Content-Type': 'application/json' }, status: 500 }
-        )
+        // Don't return here, continue processing the next message
+        console.log(`Failed to process token ${mint}: ${error.message}`);
       }
     }
   } catch (error) {
