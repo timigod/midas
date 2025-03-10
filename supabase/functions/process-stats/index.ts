@@ -62,21 +62,41 @@ function validateTokenStats(stats: TokenStats, mint: string) {
   let buyVolume = 0;
   let sellVolume = 0;
   let netVolume = 0;
+  let volumeFound = false;
   
-  // Only process volume data if it exists and is valid
-  if (stats['24h'] && stats['24h'].volume) {
-    const volumeData = stats['24h'].volume;
+  // Check for volume in 24h time period first (preferred)
+  if (stats['24h'] && stats['24h'].volume && 
+      typeof stats['24h'].volume.buys === 'number' && 
+      typeof stats['24h'].volume.sells === 'number') {
     
-    // Only use volume data if both buys and sells are valid numbers
-    if (typeof volumeData.buys === 'number' && typeof volumeData.sells === 'number') {
-      buyVolume = volumeData.buys;
-      sellVolume = volumeData.sells;
+    buyVolume = stats['24h'].volume.buys;
+    sellVolume = stats['24h'].volume.sells;
+    netVolume = buyVolume - sellVolume;
+    volumeFound = true;
+    console.log(`Found 24h volume data for token ${mint}: buys=${buyVolume}, sells=${sellVolume}`);
+  }
+  
+  // If 24h not available, try other time periods in order of preference
+  const timePeriods = ['12h', '6h', '5h', '4h', '3h', '2h', '1h', '30m', '15m', '5m', '1m'];
+  
+  for (const period of timePeriods) {
+    if (!volumeFound && stats[period] && stats[period].volume && 
+        typeof stats[period].volume.buys === 'number' && 
+        typeof stats[period].volume.sells === 'number') {
+      
+      buyVolume = stats[period].volume.buys;
+      sellVolume = stats[period].volume.sells;
       netVolume = buyVolume - sellVolume;
-    } else {
-      validationResults.warnings.push(`Token ${mint} has invalid volume data structure, using defaults`);
+      volumeFound = true;
+      console.log(`Found ${period} volume data for token ${mint}: buys=${buyVolume}, sells=${sellVolume}`);
+      validationResults.warnings.push(`Token ${mint} is missing 24h volume data, using ${period} data instead`);
+      break;
     }
-  } else {
+  }
+  
+  if (!volumeFound) {
     validationResults.warnings.push(`Token ${mint} is missing volume data, using defaults`);
+    console.log(`No volume data found for token ${mint} in any time period`);
   }
   
   validationResults.processedData.buyVolume = buyVolume;
@@ -111,13 +131,17 @@ Deno.serve(async (req) => {
     }
   }
   
+  // Get messages from queue that are ready to be processed
+  const currentTime = new Date().toISOString();
+  console.log(`Attempting to read messages from queue: ${QUEUE_NAME}`);
+  
+  // Declare variables at the top level of the function so they're accessible throughout
+  let messages: any[] = [];
+  let readError;
+  let successCount = 0;
+  let failureCount = 0;
+  
   try {
-    // Get messages from queue that are ready to be processed
-    const currentTime = new Date().toISOString();
-    console.log(`Attempting to read messages from queue: ${QUEUE_NAME}`);
-    
-    let messages;
-    let readError;
     
     try {
       const response = await supabase.functions.invoke('read-messages', {
@@ -167,9 +191,6 @@ Deno.serve(async (req) => {
 
     // Process each message
     console.log(`Processing ${messages.length} messages from the queue`);
-    
-    let successCount = 0;
-    let failureCount = 0;
     
     for (const message of messages) {
       const queueMessage = message.message as QueueMessage
@@ -483,12 +504,13 @@ Deno.serve(async (req) => {
   }
 
   // Return summary of processing results
-  console.log(`Process stats summary: ${successCount} succeeded, ${failureCount} failed`);
+  const totalMessages = Array.isArray(messages) ? messages.length : 0;
+  console.log(`Process stats summary: ${successCount} succeeded, ${failureCount} failed, total: ${totalMessages}`);
   return new Response(
     JSON.stringify({
-      message: `Processed stats for ${messages.length} tokens`,
+      message: `Processed stats for ${totalMessages} tokens`,
       summary: {
-        total: messages.length,
+        total: totalMessages,
         success: successCount,
         failure: failureCount,
         startTime: currentTime,

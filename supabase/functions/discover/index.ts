@@ -41,7 +41,6 @@ Deno.serve(async (req) => {
     
     const validTokens: Token[] = []
     const currentTime = new Date()
-    const hotTokens: string[] = []
     const rejectedTokens: {mint: string, reason: string}[] = []
 
     for (const token of discoveredTokens) {
@@ -73,20 +72,28 @@ Deno.serve(async (req) => {
         }
         
         // Prepare token for database
-        // Check if token has volume data
-        if (!token['24h'] || !token['24h'].volume) {
-          console.log(`Token ${token.mint} is missing volume data, skipping...`);
-          rejectedTokens.push({
-            mint: token.mint, 
-            reason: 'Missing volume data'
-          });
-          continue;
-        }
-
-        // Ensure volume properties exist and default to 0 if not
-        const buyVolume = token['24h'].volume.buys || 0;
-        const sellVolume = token['24h'].volume.sells || 0;
+        // Get volume data from buys/sells fields (search endpoint format)
+        // Note: The search endpoint doesn't have the same volume structure as stats endpoint
+        // It has buys and sells at the root level
+        let buyVolume = 0;
+        let sellVolume = 0;
         
+        // Check if token has transaction data
+        if (typeof token.buys === 'number' || typeof token.sells === 'number') {
+          buyVolume = token.buys || 0;
+          sellVolume = token.sells || 0;
+          console.log(`Found transaction data for token ${token.mint}: buys=${buyVolume}, sells=${sellVolume}`);
+        } else if (typeof token.totalTransactions === 'number' && token.totalTransactions > 0) {
+          // If we only have total transactions but no buy/sell breakdown, 
+          // assume an even split as a fallback
+          buyVolume = Math.round(token.totalTransactions / 2);
+          sellVolume = token.totalTransactions - buyVolume;
+          console.log(`Using totalTransactions as volume proxy for token ${token.mint}: ${token.totalTransactions}`);
+        } else {
+          console.log(`Token ${token.mint} is missing transaction data, using defaults`);
+        }
+        
+        // Use snake_case for database compatibility but cast to Token type for type safety
         const newToken = {
           mint: token.mint,
           start_market_cap: token.marketCapUsd,
@@ -99,7 +106,7 @@ Deno.serve(async (req) => {
           deadline: new Date(currentTime.getTime() + 6 * 60 * 60 * 1000).toISOString(), // current time + 6 hours
           is_active: true,
           is_hot: false
-        }
+        } as unknown as Token
 
         // Store token in database
         const { error: insertError } = await supabase
@@ -118,8 +125,8 @@ Deno.serve(async (req) => {
             token_mint: token.mint,
             market_cap_usd: token.marketCapUsd,
             liquidity_usd: token.liquidityUsd,
-            cumulative_buy_volume: token['24h'].volume.buys,
-            cumulative_net_volume: token['24h'].volume.buys - token['24h'].volume.sells,
+            cumulative_buy_volume: buyVolume,
+            cumulative_net_volume: buyVolume - sellVolume,
             timestamp: currentTime.toISOString()
           });
           
@@ -127,42 +134,11 @@ Deno.serve(async (req) => {
           console.error(`Failed to insert historical record for ${token.mint}:`, historyError);
         }
 
-        // Check if token needs immediate hotness check (market cap >= $600K)
+        // Note: We no longer perform immediate hotness check in the discover function
+        // All hotness checks are now handled by the process-stats function
+        // This ensures accurate volume data is used for hotness determination
         if (token.marketCapUsd >= IMMEDIATE_CHECK_THRESHOLD) {
-          console.log(`Token ${token.mint} qualifies for immediate hotness check with market cap $${token.marketCapUsd}`);
-          
-          // For immediate check, we use current values since we just discovered the token
-          const hotnessCheck = checkTokenHotness(
-            token.marketCapUsd, // startMarketCap is same as current for new tokens
-            token.marketCapUsd,
-            token['24h'].volume.buys,
-            token['24h'].volume.buys - token['24h'].volume.sells, // net volume
-            token.liquidityUsd
-          );
-
-          console.log(`Immediate hotness check for ${token.mint}: ${hotnessCheck.isHot ? 'HOT!' : 'Not hot'} ${hotnessCheck.reason ? `(${hotnessCheck.reason})` : ''}`);
-
-          // If token is hot, record it in token_hotness table
-          if (hotnessCheck.isHot) {
-            const { error: hotnessError } = await supabaseAdmin
-              .from('token_hotness')
-              .insert({
-                token_mint: token.mint,
-                detected_at: currentTime.toISOString(),
-                market_cap_usd: token.marketCapUsd,
-                start_market_cap: token.marketCapUsd,
-                liquidity_usd: token.liquidityUsd,
-                cumulative_buy_volume: token['24h'].volume.buys,
-                cumulative_net_volume: token['24h'].volume.buys - token['24h'].volume.sells
-              });
-
-            if (hotnessError) {
-              console.error(`Failed to record hotness for token ${token.mint}:`, hotnessError);
-            } else {
-              hotTokens.push(token.mint);
-              console.log(`Token ${token.mint} marked as HOT!`);
-            }
-          }
+          console.log(`Token ${token.mint} has high market cap ($${token.marketCapUsd}), will be evaluated for hotness in process-stats`);
         }
 
         // Queue token for stats processing with retry metadata
@@ -226,15 +202,13 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        message: `Discovery completed. Found ${validTokens.length} valid tokens. ${hotTokens.length} tokens were immediately marked as hot.`,
+        message: `Discovery completed. Found ${validTokens.length} valid tokens. All tokens queued for stats processing.`,
         summary: {
           totalTokensChecked: discoveredTokens.length,
           validTokensFound: validTokens.length,
-          liquidityFilterRejections: rejectedTokens.length,
-          hotTokensFound: hotTokens.length
+          liquidityFilterRejections: rejectedTokens.length
         },
         tokens: validTokens,
-        hotTokens,
         rejectedTokens
       }),
       {
