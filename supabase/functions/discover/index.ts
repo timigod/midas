@@ -37,7 +37,7 @@ Deno.serve(async (req) => {
     }
 
     const { data: discoveredTokens } = await searchResponse.json()
-    console.log(`Found ${discoveredTokens?.length || 0} tokens from Solana Tracker API`);
+    console.log(`Yay! Found ${discoveredTokens?.length || 0} tokens from Solana Tracker API`);
     
     const validTokens: Token[] = []
     const currentTime = new Date()
