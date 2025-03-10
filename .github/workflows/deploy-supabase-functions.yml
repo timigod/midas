@@ -42,13 +42,15 @@ jobs:
         run: |
           # Get the list of changed files
           # For pull requests, compare with the base branch
-          # For direct pushes to main, compare with the previous commit
+          # For direct pushes to main, list all files in supabase/functions directory
           if [[ -n "$GITHUB_BASE_REF" ]]; then
             echo "This is a pull request. Comparing with base branch: $GITHUB_BASE_REF"
             CHANGED_FILES=$(git diff --name-only origin/$GITHUB_BASE_REF...HEAD)
           else
-            echo "This is a direct push to main. Comparing with previous commit."
-            CHANGED_FILES=$(git diff --name-only HEAD^ HEAD || git diff --name-only HEAD~1 HEAD)
+            echo "This is a direct push to main. Listing all functions files."
+            # When running in a fresh checkout, we don't have history for HEAD^ or HEAD~1
+            # So instead we'll deploy all functions in the supabase/functions directory
+            CHANGED_FILES=$(find supabase/functions -type f | grep -v "node_modules")
           fi
           
           # Extract function names from changed files
