@@ -1,5 +1,9 @@
 name: Deploy Supabase Functions
 
+# Required repository secrets:
+# - SUPABASE_ACCESS_TOKEN: Your personal access token from https://supabase.com/dashboard/account/tokens
+# - SUPABASE_PROJECT_ID: The project ID found in your Supabase project URL or dashboard
+
 on:
   push:
     branches:
@@ -20,18 +24,35 @@ jobs:
           node-version: '18'
 
       - name: Install Supabase CLI
-        run: npm install -g supabase@latest
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
 
-      - name: Login to Supabase
-        run: supabase login --access-token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      # No need for explicit login with the official action
+      # The access token will be used directly with each command
 
+      # Set project ID from secrets
       - name: Set project ID
         run: |
-          echo "PROJECT_ID=$(supabase projects list --access-token ${{ secrets.SUPABASE_ACCESS_TOKEN }} | grep ${{ secrets.SUPABASE_PROJECT_NAME }} | awk '{print $1}')" >> $GITHUB_ENV
+          echo "PROJECT_ID=${{ secrets.SUPABASE_PROJECT_ID }}" >> $GITHUB_ENV
 
       - name: Detect and deploy changed functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
-          CHANGED_FUNCTIONS=$(git diff --name-only HEAD^ HEAD | grep "supabase/functions/" | awk -F/ '{print $3}' | sort | uniq)
+          # Get the list of changed files
+          # For pull requests, compare with the base branch
+          # For direct pushes to main, compare with the previous commit
+          if [[ -n "$GITHUB_BASE_REF" ]]; then
+            echo "This is a pull request. Comparing with base branch: $GITHUB_BASE_REF"
+            CHANGED_FILES=$(git diff --name-only origin/$GITHUB_BASE_REF...HEAD)
+          else
+            echo "This is a direct push to main. Comparing with previous commit."
+            CHANGED_FILES=$(git diff --name-only HEAD^ HEAD || git diff --name-only HEAD~1 HEAD)
+          fi
+          
+          # Extract function names from changed files
+          CHANGED_FUNCTIONS=$(echo "$CHANGED_FILES" | grep -E "^supabase/functions/[^/]+/" | cut -d'/' -f3 | sort -u)
           
           if [ -z "$CHANGED_FUNCTIONS" ]; then
             echo "No functions were changed."
@@ -40,9 +61,10 @@ jobs:
           
           echo "The following functions were changed: $CHANGED_FUNCTIONS"
           
+          # Deploy each changed function
           for func in $CHANGED_FUNCTIONS; do
             if [ -d "supabase/functions/$func" ]; then
               echo "Deploying function: $func"
-              supabase functions deploy "$func" --project-ref ${{ env.PROJECT_ID }} --access-token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+              supabase functions deploy "$func" --project-ref ${{ env.PROJECT_ID }}
             fi
           done
