@@ -1,0 +1,90 @@
+name: Deploy Supabase Functions
+
+# Required repository secrets:
+# - SUPABASE_ACCESS_TOKEN: Your personal access token from https://supabase.com/dashboard/account/tokens
+# - SUPABASE_PROJECT_ID: The project ID found in your Supabase project URL or dashboard (required, must not be empty)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # No need for explicit login with the official action
+      # The access token will be used directly with each command
+
+      # Set project ID directly from secrets
+      - name: Check project ID
+        run: |
+          if [ -z "${{ secrets.SUPABASE_PROJECT_ID }}" ]; then
+            echo "Error: SUPABASE_PROJECT_ID secret is not set or is empty"
+            exit 1
+          fi
+
+      - name: Detect and deploy changed functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          # Get the list of changed files
+          # For pull requests, compare with the base branch
+          # For direct pushes to main, list all files in supabase/functions directory
+          if [[ -n "$GITHUB_BASE_REF" ]]; then
+            echo "This is a pull request. Comparing with base branch: $GITHUB_BASE_REF"
+            CHANGED_FILES=$(git diff --name-only origin/$GITHUB_BASE_REF...HEAD)
+          else
+            echo "This is a direct push to main. Listing all functions files."
+            # When running in a fresh checkout, we don't have history for HEAD^ or HEAD~1
+            # Instead of trying to determine specific changes, deploy all functions
+            echo "Deploying all functions in supabase/functions directory"
+            # Get a list of all directories in supabase/functions (each directory is a function)
+            FUNCTIONS=$(find supabase/functions -maxdepth 1 -mindepth 1 -type d -not -path "*/\.*" | sort)
+            
+            # Skip extraction and directly deploy each function
+            for func_path in $FUNCTIONS; do
+              func_name=$(basename "$func_path")
+              # Skip _shared directory as it's not a deployable function
+              if [ "$func_name" != "_shared" ]; then
+                echo "Deploying function: $func_name"
+                supabase functions deploy "$func_name" --project-ref ${{ secrets.SUPABASE_PROJECT_ID }}
+              fi
+            done
+            
+            # Exit to avoid the regular function extraction and deployment below
+            exit 0
+          fi
+          
+          # Extract function names from changed files
+          CHANGED_FUNCTIONS=$(echo "$CHANGED_FILES" | grep -E "^supabase/functions/[^/]+/" | cut -d'/' -f3 | sort -u)
+          
+          if [ -z "$CHANGED_FUNCTIONS" ]; then
+            echo "No functions were changed."
+            exit 0
+          fi
+          
+          echo "The following functions were changed: $CHANGED_FUNCTIONS"
+          
+          # Deploy each changed function
+          for func in $CHANGED_FUNCTIONS; do
+            if [ -d "supabase/functions/$func" ]; then
+              echo "Deploying function: $func"
+              supabase functions deploy "$func" --project-ref ${{ secrets.SUPABASE_PROJECT_ID }}
+            fi
+          done
