@@ -1,0 +1,48 @@
+name: Deploy Supabase Functions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Supabase CLI
+        run: npm install -g supabase@latest
+
+      - name: Login to Supabase
+        run: supabase login --access-token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Set project ID
+        run: |
+          echo "PROJECT_ID=$(supabase projects list --access-token ${{ secrets.SUPABASE_ACCESS_TOKEN }} | grep ${{ secrets.SUPABASE_PROJECT_NAME }} | awk '{print $1}')" >> $GITHUB_ENV
+
+      - name: Detect and deploy changed functions
+        run: |
+          CHANGED_FUNCTIONS=$(git diff --name-only HEAD^ HEAD | grep "supabase/functions/" | awk -F/ '{print $3}' | sort | uniq)
+          
+          if [ -z "$CHANGED_FUNCTIONS" ]; then
+            echo "No functions were changed."
+            exit 0
+          fi
+          
+          echo "The following functions were changed: $CHANGED_FUNCTIONS"
+          
+          for func in $CHANGED_FUNCTIONS; do
+            if [ -d "supabase/functions/$func" ]; then
+              echo "Deploying function: $func"
+              supabase functions deploy "$func" --project-ref ${{ env.PROJECT_ID }} --access-token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+            fi
+          done
