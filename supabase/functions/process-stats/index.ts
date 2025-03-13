@@ -199,23 +199,49 @@ Deno.serve(async (req) => {
       console.log(`Processing token ${mint} (retry count: ${retryCount})`);
 
       try {
-        // Get token stats
-        const statsResponse = await fetch(`${SOLANA_TRACKER_API_URL}/stats/${mint}`, {
+        // Get token data using the correct endpoint
+        const tokenResponse = await fetch(`${SOLANA_TRACKER_API_URL}/tokens/${mint}`, {
           headers: {
             'x-api-key': SOLANA_TRACKER_API_KEY
           },
           method: 'GET'
         })
 
-        if (!statsResponse.ok) {
-          if (statsResponse.status === 429) {
+        if (!tokenResponse.ok) {
+          if (tokenResponse.status === 429) {
             // Rate limited, throw error to retry
             throw new Error('Rate limited')
           }
-          throw new Error(`Failed to fetch stats: ${statsResponse.statusText}`)
+          throw new Error(`Failed to fetch token data: ${tokenResponse.statusText}`)
         }
 
-        const stats: TokenStats = await statsResponse.json()
+        const tokenData = await tokenResponse.json()
+        
+        // Also get stats for volume data
+        const statsResponse = await fetch(`${SOLANA_TRACKER_API_URL}/stats/${mint}`, {
+          headers: {
+            'x-api-key': SOLANA_TRACKER_API_KEY
+          },
+          method: 'GET'
+        })
+        
+        // We'll continue even if stats endpoint fails, as we primarily need the token data
+        let statsData = null
+        if (statsResponse.ok) {
+          statsData = await statsResponse.json()
+        } else {
+          console.warn(`Failed to fetch stats data for ${mint}: ${statsResponse.statusText}. Will continue with token data only.`)
+        }
+        
+        // Construct a TokenStats object from the token data
+        const stats: TokenStats = {
+          // Get market cap from the first pool (if available)
+          marketCapUsd: tokenData.pools && tokenData.pools[0] ? tokenData.pools[0].marketCap.usd : 0,
+          // Get liquidity from the first pool (if available)
+          liquidityUsd: tokenData.pools && tokenData.pools[0] ? tokenData.pools[0].liquidity.usd : 0,
+          // Add volume data from stats if available
+          ...(statsData ? statsData : {})
+        }
 
         // Get token from database
         const { data: token, error: getError } = await supabase
@@ -231,6 +257,33 @@ Deno.serve(async (req) => {
         if (!token) {
           console.error(`Token ${mint} not found in database`);
           throw new Error(`Token ${mint} not found`);
+        }
+        
+        // Skip processing for inactive tokens
+        if (!token.is_active) {
+          console.log(`Token ${mint} is inactive, skipping processing and removing from queue`);
+          
+          // Delete message from queue
+          try {
+            console.log(`Attempting to delete message ${message.message_id} from queue ${QUEUE_NAME}`);
+            const deleteResponse = await supabase.functions.invoke('delete-message', {
+              body: {
+                queue_name: QUEUE_NAME,
+                message_id: message.message_id
+              }
+            });
+            
+            if (deleteResponse.error) {
+              console.error(`Error deleting message ${message.message_id}:`, deleteResponse.error);
+            } else {
+              console.log(`Successfully deleted message ${message.message_id}`);
+            }
+          } catch (deleteInvokeError) {
+            console.error(`Failed to invoke delete-message function:`, deleteInvokeError);
+          }
+          
+          // Skip further processing for this token
+          continue;
         }
 
         // Validate the stats data structure before processing
