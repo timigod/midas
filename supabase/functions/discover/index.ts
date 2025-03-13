@@ -72,26 +72,6 @@ Deno.serve(async (req) => {
         }
         
         // Prepare token for database
-        // Get volume data from buys/sells fields (search endpoint format)
-        // Note: The search endpoint doesn't have the same volume structure as stats endpoint
-        // It has buys and sells at the root level
-        let buyVolume = 0;
-        let sellVolume = 0;
-        
-        // Check if token has transaction data
-        if (typeof token.buys === 'number' || typeof token.sells === 'number') {
-          buyVolume = token.buys || 0;
-          sellVolume = token.sells || 0;
-          console.log(`Found transaction data for token ${token.mint}: buys=${buyVolume}, sells=${sellVolume}`);
-        } else if (typeof token.totalTransactions === 'number' && token.totalTransactions > 0) {
-          // If we only have total transactions but no buy/sell breakdown, 
-          // assume an even split as a fallback
-          buyVolume = Math.round(token.totalTransactions / 2);
-          sellVolume = token.totalTransactions - buyVolume;
-          console.log(`Using totalTransactions as volume proxy for token ${token.mint}: ${token.totalTransactions}`);
-        } else {
-          console.log(`Token ${token.mint} is missing transaction data, using defaults`);
-        }
         
         // Use snake_case for database compatibility but cast to Token type for type safety
         const newToken = {
@@ -99,8 +79,8 @@ Deno.serve(async (req) => {
           start_market_cap: token.marketCapUsd,
           liquidity_usd: token.liquidityUsd,
           market_cap_usd: token.marketCapUsd,
-          cumulative_buy_volume: buyVolume,
-          cumulative_net_volume: buyVolume - sellVolume,
+          cumulative_buy_volume: 0,
+          cumulative_net_volume: 0,
           created_at: currentTime.toISOString(),
           last_updated: currentTime.toISOString(),
           deadline: new Date(currentTime.getTime() + 6 * 60 * 60 * 1000).toISOString(), // current time + 6 hours
@@ -125,8 +105,8 @@ Deno.serve(async (req) => {
             token_mint: token.mint,
             market_cap_usd: token.marketCapUsd,
             liquidity_usd: token.liquidityUsd,
-            cumulative_buy_volume: buyVolume,
-            cumulative_net_volume: buyVolume - sellVolume,
+            cumulative_buy_volume: 0,
+            cumulative_net_volume: 0,
             timestamp: currentTime.toISOString()
           });
           
