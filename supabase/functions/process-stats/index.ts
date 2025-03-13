@@ -393,10 +393,26 @@ Deno.serve(async (req) => {
           console.log(`Token ${mint} qualifies for hotness check with market cap $${stats.marketCapUsd}`);
           
           // Check hotness criteria directly (matching the original worker.js logic)
-          // Ensure we have a valid start_market_cap to compare against
-          const startMarketCap = typeof token.start_market_cap === 'number' && token.start_market_cap > 0 
-            ? token.start_market_cap 
-            : stats.marketCapUsd / 3; // Fallback to a reasonable value if start_market_cap is invalid
+          // Only proceed if we have a valid start_market_cap to compare against
+          if (typeof token.start_market_cap !== 'number' || token.start_market_cap <= 0) {
+            console.log(`Token ${mint} has invalid start_market_cap (${token.start_market_cap}), skipping hotness check`);
+            // Update token but skip hotness check
+            const { error: updateError } = await supabase
+              .from('tokens')
+              .update(updates)
+              .eq('mint', mint);
+              
+            if (updateError) {
+              console.error(`Failed to update token ${mint}:`, updateError);
+              throw new Error(`Database update error: ${updateError.message}`);
+            } else {
+              console.log(`Successfully updated token ${mint} with new stats`);
+              successCount++;
+            }
+            continue;
+          }
+          
+          const startMarketCap = token.start_market_cap;
             
           const marketCapGrowth = stats.marketCapUsd >= 3 * startMarketCap;
           const buyVolumeRatio = (updatedBuyVolume / stats.marketCapUsd) >= 0.05;
