@@ -154,7 +154,7 @@ Deno.serve(async (req) => {
         }
       });
       
-      messages = response.data;
+      messages = response.data.data;
       readError = response.error;
       
       console.log(`Read messages response: ${messages ? messages.length : 0} messages found`);
