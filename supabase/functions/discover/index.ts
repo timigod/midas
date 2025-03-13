@@ -71,6 +71,92 @@ Deno.serve(async (req) => {
           continue;
         }
         
+        // Fetch volume data from stats endpoint
+        console.log(`Fetching volume data for token ${token.mint}`);
+        const statsResponse = await fetch(`${SOLANA_TRACKER_API_URL}/stats/${token.mint}`, {
+          headers: {
+            'x-api-key': SOLANA_TRACKER_API_KEY
+          },
+          method: 'GET'
+        });
+        
+        if (!statsResponse.ok) {
+          console.error(`Failed to fetch stats data for ${token.mint}: ${statsResponse.statusText}`);
+          rejectedTokens.push({
+            mint: token.mint, 
+            reason: `Failed to fetch volume data: ${statsResponse.statusText}`
+          });
+          continue;
+        }
+        
+        const statsData = await statsResponse.json();
+        
+        // Extract 24h volume data (or fall back to other time periods if needed)
+        let buyVolume = 0;
+        let sellVolume = 0;
+        let netVolume = 0;
+        let volumeFound = false;
+        
+        // Check for volume in 24h time period first (preferred)
+        if (statsData['24h'] && statsData['24h'].volume && 
+            typeof statsData['24h'].volume.buys === 'number' && 
+            typeof statsData['24h'].volume.sells === 'number') {
+          
+          buyVolume = statsData['24h'].volume.buys;
+          sellVolume = statsData['24h'].volume.sells;
+          netVolume = buyVolume - sellVolume;
+          volumeFound = true;
+          console.log(`Found 24h volume data for token ${token.mint}: buys=${buyVolume}, sells=${sellVolume}`);
+        }
+        
+        // If 24h not available, try other time periods in order of preference
+        if (!volumeFound) {
+          const timePeriods = ['12h', '6h', '5h', '4h', '3h', '2h', '1h', '30m', '15m', '5m', '1m'];
+          
+          for (const period of timePeriods) {
+            if (statsData[period] && statsData[period].volume && 
+                typeof statsData[period].volume.buys === 'number' && 
+                typeof statsData[period].volume.sells === 'number') {
+              
+              buyVolume = statsData[period].volume.buys;
+              sellVolume = statsData[period].volume.sells;
+              netVolume = buyVolume - sellVolume;
+              volumeFound = true;
+              console.log(`Found ${period} volume data for token ${token.mint}: buys=${buyVolume}, sells=${sellVolume}`);
+              break;
+            }
+          }
+        }
+        
+        if (!volumeFound) {
+          console.log(`No volume data found for token ${token.mint} in any time period`);
+          rejectedTokens.push({
+            mint: token.mint, 
+            reason: `No volume data available`
+          });
+          continue;
+        }
+        
+        // Apply volume-based filtering criteria
+        const buyVolumeRatio = (buyVolume / token.marketCapUsd) >= 0.05;
+        const positiveNetVolume = netVolume > 0;
+        
+        if (!buyVolumeRatio) {
+          rejectedTokens.push({
+            mint: token.mint, 
+            reason: `Insufficient buy volume ratio: ${(buyVolume / token.marketCapUsd * 100).toFixed(2)}% (required >= 5%)`
+          });
+          continue;
+        }
+        
+        if (!positiveNetVolume) {
+          rejectedTokens.push({
+            mint: token.mint, 
+            reason: `Negative net volume: ${netVolume}`
+          });
+          continue;
+        }
+        
         // Prepare token for database
         
         // Use snake_case for database compatibility but cast to Token type for type safety
@@ -79,8 +165,8 @@ Deno.serve(async (req) => {
           start_market_cap: token.marketCapUsd,
           liquidity_usd: token.liquidityUsd,
           market_cap_usd: token.marketCapUsd,
-          cumulative_buy_volume: 0,
-          cumulative_net_volume: 0,
+          cumulative_buy_volume: buyVolume,
+          cumulative_net_volume: netVolume,
           created_at: currentTime.toISOString(),
           last_updated: currentTime.toISOString(),
           deadline: new Date(currentTime.getTime() + 6 * 60 * 60 * 1000).toISOString(), // current time + 6 hours
@@ -105,8 +191,8 @@ Deno.serve(async (req) => {
             token_mint: token.mint,
             market_cap_usd: token.marketCapUsd,
             liquidity_usd: token.liquidityUsd,
-            cumulative_buy_volume: 0,
-            cumulative_net_volume: 0,
+            cumulative_buy_volume: buyVolume,
+            cumulative_net_volume: netVolume,
             timestamp: currentTime.toISOString()
           });
           
@@ -114,11 +200,51 @@ Deno.serve(async (req) => {
           console.error(`Failed to insert historical record for ${token.mint}:`, historyError);
         }
 
-        // Note: We no longer perform immediate hotness check in the discover function
-        // All hotness checks are now handled by the process-stats function
-        // This ensures accurate volume data is used for hotness determination
-        if (token.marketCapUsd >= IMMEDIATE_CHECK_THRESHOLD) {
-          console.log(`Token ${token.mint} has high market cap ($${token.marketCapUsd}), will be evaluated for hotness in process-stats`);
+        // Check if token meets all hotness criteria and has market cap >= $600K
+        const isHot = token.marketCapUsd >= IMMEDIATE_CHECK_THRESHOLD;
+        
+        if (isHot) {
+          console.log(`Token ${token.mint} meets all hotness criteria with market cap $${token.marketCapUsd}`);
+          
+          // Check if token is already marked as hot
+          const { data: existingHotness } = await supabase
+            .from('token_hotness')
+            .select('*')
+            .eq('token_mint', token.mint)
+            .limit(1);
+          
+          if (!existingHotness || existingHotness.length === 0) {
+            // Insert into token_hotness table using admin client to bypass RLS
+            const { error: hotnessError } = await supabaseAdmin
+              .from('token_hotness')
+              .insert({
+                token_mint: token.mint,
+                detected_at: currentTime.toISOString(),
+                market_cap_usd: token.marketCapUsd,
+                start_market_cap: token.marketCapUsd, // Same as current since it's just discovered
+                liquidity_usd: token.liquidityUsd,
+                cumulative_buy_volume: buyVolume,
+                cumulative_net_volume: netVolume
+              });
+
+            if (hotnessError) {
+              console.error(`Failed to record hotness for token ${token.mint}:`, hotnessError);
+            } else {
+              console.log(`Token ${token.mint} marked as HOT! Buy volume ratio: ${(buyVolume / token.marketCapUsd).toFixed(4)}, Net volume: ${netVolume}, Liquidity ratio: ${(token.liquidityUsd / token.marketCapUsd).toFixed(4)}`);
+              
+              // Update token record to mark it as hot
+              const { error: updateError } = await supabase
+                .from('tokens')
+                .update({ is_hot: true })
+                .eq('mint', token.mint);
+                
+              if (updateError) {
+                console.error(`Failed to update hot status for token ${token.mint}:`, updateError);
+              }
+            }
+          } else {
+            console.log(`Token ${token.mint} is already marked as hot, skipping...`);
+          }
         }
 
         // Queue token for stats processing with retry metadata
