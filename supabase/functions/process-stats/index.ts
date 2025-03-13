@@ -199,8 +199,16 @@ Deno.serve(async (req) => {
       const queueMessage = message.message as QueueMessage
       const { mint, retryCount } = queueMessage
       
+      // Extract the message ID from the database record
+      const messageId = message.id
+      
       console.log(`Processing token ${mint} (retry count: ${retryCount})`);
-      console.log(`Message ID properties - message.id: ${message.id}, message.message_id: ${message.message_id}`);
+      console.log(`Message ID: ${messageId}`);
+      
+      if (!messageId) {
+        console.error(`No message ID found for token ${mint}, skipping processing`);
+        continue;
+      }
       // This will help us determine which property to use
 
       try {
@@ -252,12 +260,11 @@ Deno.serve(async (req) => {
               const deleteResponse = await supabase.functions.invoke('delete-message', {
                 body: {
                   queue_name: QUEUE_NAME,
-                  message_id: message.id
+                  message_id: messageId
                 }
-              });
-              
+              });              
               if (deleteResponse.error) {
-                console.error(`Error deleting message ${message.id}:`, deleteResponse.error);
+                console.error(`Error deleting message ${messageId}:`, deleteResponse.error);
               }
             } catch (deleteInvokeError) {
               console.error(`Failed to invoke delete-message function:`, deleteInvokeError);
@@ -276,12 +283,11 @@ Deno.serve(async (req) => {
               const deleteResponse = await supabase.functions.invoke('delete-message', {
                 body: {
                   queue_name: QUEUE_NAME,
-                  message_id: message.id
+                  message_id: messageId
                 }
-              });
-              
+              });              
               if (deleteResponse.error) {
-                console.error(`Error deleting message ${message.id}:`, deleteResponse.error);
+                console.error(`Error deleting message ${messageId}:`, deleteResponse.error);
               }
             } catch (deleteInvokeError) {
               console.error(`Failed to invoke delete-message function:`, deleteInvokeError);
@@ -324,18 +330,18 @@ Deno.serve(async (req) => {
           
           // Delete message from queue
           try {
-            console.log(`Attempting to delete message ${message.id} from queue ${QUEUE_NAME}`);
+            console.log(`Attempting to delete message ${messageId} from queue ${QUEUE_NAME}`);
             const deleteResponse = await supabase.functions.invoke('delete-message', {
               body: {
                 queue_name: QUEUE_NAME,
-                message_id: message.id
+                message_id: messageId
               }
             });
             
             if (deleteResponse.error) {
-              console.error(`Error deleting message ${message.id}:`, deleteResponse.error);
+              console.error(`Error deleting message ${messageId}:`, deleteResponse.error);
             } else {
-              console.log(`Successfully deleted message ${message.id}`);
+              console.log(`Successfully deleted message ${messageId}`);
             }
           } catch (deleteInvokeError) {
             console.error(`Failed to invoke delete-message function:`, deleteInvokeError);
@@ -523,12 +529,11 @@ Deno.serve(async (req) => {
 
           // Update message in queue
           try {
-            console.log(`Attempting to update message ${message.id} for retry ${retryCount + 1}`);
+            console.log(`Attempting to update message ${messageId} for retry ${retryCount + 1}`);
             const updateResponse = await supabase.functions.invoke('update-message', {
               body: {
                 queue_name: QUEUE_NAME,
-                message_id: message.id,
-                message: updatedMessage,
+                message_id: messageId,                message: updatedMessage,
                 visible_after: nextRetryTime.toISOString() // Ensure message isn't visible until retry time
               }
             });
@@ -537,7 +542,7 @@ Deno.serve(async (req) => {
               console.error(`Failed to update message for retry:`, updateResponse.error);
               // Continue anyway, we'll return a 429 to indicate retry is needed
             } else {
-              console.log(`Successfully scheduled message ${message.id} for retry at ${nextRetryTime.toISOString()}`);
+              console.log(`Successfully scheduled message ${messageId} for retry at ${nextRetryTime.toISOString()}`);
             }
           } catch (updateInvokeError) {
             console.error(`Failed to invoke update-message function:`, updateInvokeError);
@@ -555,7 +560,7 @@ Deno.serve(async (req) => {
         } else if (retryCount >= RETRY_CONFIG.MAX_RETRIES) {
           // Move to dead letter queue after max retries
           try {
-            console.log(`Moving message ${message.id} to dead letter queue after ${retryCount} failed attempts`);
+            console.log(`Moving message ${messageId} to dead letter queue after ${retryCount} failed attempts`);
             const dlqResponse = await supabase.functions.invoke('send-message', {
               body: {
                 queue_name: `${QUEUE_NAME}_dlq`,
@@ -573,7 +578,7 @@ Deno.serve(async (req) => {
             if (dlqResponse.error) {
               console.error(`Failed to move message to DLQ:`, dlqResponse.error);
             } else {
-              console.log(`Successfully moved message ${message.id} to DLQ`);
+              console.log(`Successfully moved message ${messageId} to DLQ`);
             }
           } catch (dlqInvokeError) {
             console.error(`Failed to invoke send-message for DLQ:`, dlqInvokeError);
@@ -581,18 +586,18 @@ Deno.serve(async (req) => {
 
           // Delete the original message
           try {
-            console.log(`Attempting to delete failed message ${message.id} from queue ${QUEUE_NAME}`);
+            console.log(`Attempting to delete failed message ${messageId} from queue ${QUEUE_NAME}`);
             const deleteResponse = await supabase.functions.invoke('delete-message', {
               body: {
                 queue_name: QUEUE_NAME,
-                message_id: message.id
+                message_id: messageId
               }
             });
             
             if (deleteResponse.error) {
               console.error(`Failed to delete message after moving to DLQ:`, deleteResponse.error);
             } else {
-              console.log(`Successfully deleted failed message ${message.id} after moving to DLQ`);
+              console.log(`Successfully deleted failed message ${messageId} after moving to DLQ`);
             }
           } catch (deleteInvokeError) {
             console.error(`Failed to invoke delete-message function:`, deleteInvokeError);
