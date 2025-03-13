@@ -233,6 +233,60 @@ Deno.serve(async (req) => {
           console.warn(`Failed to fetch stats data for ${mint}: ${statsResponse.statusText}. Will continue with token data only.`)
         }
         
+        // Check if the token has been rugged or has too high risk
+        // Higher score = more risk (10 is highest risk, 1 is lowest risk)
+        const MAX_RISK_THRESHOLD = 7; // Maximum acceptable risk score on a scale of 1-10
+        
+        if (tokenData.risk) {
+          // Check if token has been explicitly marked as rugged
+          if (tokenData.risk.rugged === true) {
+            console.log(`Token ${mint} has been rugged, skipping processing`);
+            
+            // Delete message from queue
+            try {
+              const deleteResponse = await supabase.functions.invoke('delete-message', {
+                body: {
+                  queue_name: QUEUE_NAME,
+                  message_id: message.message_id
+                }
+              });
+              
+              if (deleteResponse.error) {
+                console.error(`Error deleting message ${message.message_id}:`, deleteResponse.error);
+              }
+            } catch (deleteInvokeError) {
+              console.error(`Failed to invoke delete-message function:`, deleteInvokeError);
+            }
+            
+            // Skip further processing for this token
+            continue;
+          }
+          
+          // Check if risk score exceeds our threshold (higher score = more risk)
+          if (tokenData.risk.score > MAX_RISK_THRESHOLD) {
+            console.log(`Token ${mint} has a risk score of ${tokenData.risk.score}, which exceeds our threshold of ${MAX_RISK_THRESHOLD}`);
+            
+            // Delete message from queue
+            try {
+              const deleteResponse = await supabase.functions.invoke('delete-message', {
+                body: {
+                  queue_name: QUEUE_NAME,
+                  message_id: message.message_id
+                }
+              });
+              
+              if (deleteResponse.error) {
+                console.error(`Error deleting message ${message.message_id}:`, deleteResponse.error);
+              }
+            } catch (deleteInvokeError) {
+              console.error(`Failed to invoke delete-message function:`, deleteInvokeError);
+            }
+            
+            // Skip further processing for this token
+            continue;
+          }
+        }
+        
         // Construct a TokenStats object from the token data
         const stats: TokenStats = {
           // Get market cap from the first pool (if available)
