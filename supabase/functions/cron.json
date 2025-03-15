@@ -1,27 +1,27 @@
 {
   "functions": [
     {
-      "name": "discover_tokens",
+      "name": "discover",
       "schedule": "0 * * * *",
       "function": "discover"
     },
     {
-      "name": "monitor_tokens",
+      "name": "queue-tokens",
       "schedule": "*/30 * * * *",
-      "function": "monitor"
+      "function": "queue-tokens"
     },
     {
-      "name": "process_token_stats",
-      "schedule": "*/15 * * * *",
+      "name": "process-stats",
+      "schedule": "* * * * *",
       "function": "process-stats"
     },
     {
-      "name": "archive_expired_tokens",
-      "schedule": "*/60 * * * *",
+      "name": "archive-expired",
+      "schedule": "0 * * * *",
       "function": "archive-expired"
     },
     {
-      "name": "reset_stuck_messages",
+      "name": "reset-stuck-messages",
       "schedule": "0 0 * * *",
       "function": "read-messages",
       "body": {
