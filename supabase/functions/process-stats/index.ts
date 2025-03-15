@@ -125,14 +125,17 @@ function calculateNextRetryTime(retryCount: number): Date {
 }
 
 Deno.serve(async (req) => {
+  // Declare variables outside the try block to make them accessible throughout the function
+  const currentTime = new Date().toISOString()
+  let successCount = 0
+  let failureCount = 0
+  let messages: any[] = []
+  
   try {
     console.log('Starting token stats processing...')
-    const currentTime = new Date().toISOString()
-    let successCount = 0
-    let failureCount = 0
     
     // Get messages from the queue
-    const { data: messages, error: queueError } = await supabase
+    const { data, error: queueError } = await supabase
       .from(QUEUE_NAME)
       .select('*')
       .lte('visible_after', currentTime)
@@ -149,6 +152,9 @@ Deno.serve(async (req) => {
         { headers: { 'Content-Type': 'application/json' }, status: 500 }
       )
     }
+    
+    // Assign to the outer variable
+    messages = data || []
     
     if (!messages || messages.length === 0) {
       console.log('No messages in queue to process')
@@ -731,7 +737,7 @@ Deno.serve(async (req) => {
   }
   
   // Return summary of processing results
-  const totalMessages = Array.isArray(messages) ? messages.length : 0
+  const totalMessages = messages.length
   console.log(`Process stats summary: ${successCount} succeeded, ${failureCount} failed, total: ${totalMessages}`)
   return new Response(
     JSON.stringify({

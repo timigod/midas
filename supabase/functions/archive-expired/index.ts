@@ -9,8 +9,8 @@ Deno.serve(async (req) => {
   try {
     console.log('Starting expired tokens archival process...')
     const currentTime = new Date().toISOString()
-    const archivedTokens = []
-    const errors = []
+    const archivedTokens: any[] = []
+    const errors: string[] = []
     
     // Get tokens that have passed their deadline
     const { data: expiredTokens, error: fetchError } = await supabase

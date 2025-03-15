@@ -12,8 +12,8 @@ Deno.serve(async (req) => {
   try {
     console.log('Starting token queuing process...')
     const currentTime = new Date().toISOString()
-    const queuedTokens = []
-    const errors = []
+    const queuedTokens: string[] = []
+    const errors: string[] = []
     
     // Get all tokens from the tokens table
     const { data: tokens, error: tokensError } = await supabase
