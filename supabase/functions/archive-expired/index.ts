@@ -9,16 +9,14 @@ Deno.serve(async (req) => {
   try {
     console.log('Starting expired tokens archival process...')
     const currentTime = new Date().toISOString()
-    const archivedTokens = []
-    const errors = []
+    const archivedTokens: any[] = []
+    const errors: string[] = []
     
-    // Get tokens that have passed their deadline and aren't hot
+    // Get tokens that have passed their deadline
     const { data: expiredTokens, error: fetchError } = await supabase
       .from('tokens')
       .select('*')
       .lt('deadline', currentTime)
-      .eq('is_active', true)
-      .is('is_hot', false) // Only get non-hot tokens
     
     if (fetchError) {
       console.error('Error fetching expired tokens:', fetchError)
@@ -37,11 +35,21 @@ Deno.serve(async (req) => {
     // Archive each expired token
     for (const token of (expiredTokens || [])) {
       try {
-        // Update token to mark as inactive
+        // Insert token into archived_tokens table
         const { error: archiveError } = await supabase
-          .from('tokens')
-          .update({ is_active: false })
-          .eq('mint', token.mint)
+          .from('archived_tokens')
+          .insert({
+            token_mint: token.mint,
+            name: token.name,
+            symbol: token.symbol,
+            start_market_cap: token.start_market_cap,
+            final_market_cap: token.market_cap_usd,
+            liquidity_usd: token.liquidity_usd,
+            cumulative_buy_volume: token.cumulative_buy_volume,
+            cumulative_net_volume: token.cumulative_net_volume,
+            created_at: token.created_at,
+            deadline: token.deadline
+          })
         
         if (archiveError) {
           console.error(`Error archiving token ${token.mint}:`, archiveError)
@@ -49,14 +57,28 @@ Deno.serve(async (req) => {
           continue
         }
         
+        // Delete token from tokens table
+        const { error: deleteError } = await supabase
+          .from('tokens')
+          .delete()
+          .eq('mint', token.mint)
+        
+        if (deleteError) {
+          console.error(`Error deleting token ${token.mint}:`, deleteError)
+          errors.push(`Failed to delete token ${token.mint}: ${deleteError.message}`)
+          continue
+        }
+        
         archivedTokens.push({
           mint: token.mint,
+          name: token.name,
+          symbol: token.symbol,
           deadline: token.deadline,
           marketCapUsd: token.market_cap_usd,
           startMarketCap: token.start_market_cap
         })
         
-        console.log(`Archived token ${token.mint} (deadline passed, not hot)`)
+        console.log(`Archived token ${token.mint} (deadline passed)`)
       } catch (error) {
         console.error(`Error processing token ${token.mint}:`, error)
         errors.push(`Error processing token ${token.mint}: ${error.message}`)
@@ -82,14 +104,3 @@ Deno.serve(async (req) => {
     )
   }
 })
-
-/* To invoke locally:
-
-  1. Run `supabase start` (see: https://supabase.com/docs/reference/cli/supabase-start)
-  2. Make an HTTP request:
-
-  curl -i --location --request POST 'http://127.0.0.1:54321/functions/v1/archive-expired' \
-    --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0' \
-    --header 'Content-Type: application/json'
-
-*/
