@@ -2,9 +2,8 @@
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
 
--- Set up service role key as a database setting
--- Note: Replace 'your-service-role-key' with your actual service role key from Supabase dashboard
-ALTER DATABASE postgres SET app.settings.service_role_key = 'your-service-role-key';
+-- Note: We'll use the service role key directly in the cron job definitions
+-- instead of setting it as a database parameter due to permission restrictions
 
 -- Drop existing cron jobs if they exist
 DO $$
@@ -33,7 +32,8 @@ SELECT cron.schedule(
     $$
     SELECT net.http_post(
         url:='https://mgdagmkhveyrshpbitdd.supabase.co/functions/v1/discover',
-        headers:='{"Authorization": "Bearer ' || current_setting('app.settings.service_role_key') || '"}'::jsonb
+        headers:='{"Authorization": "Bearer YOUR_SERVICE_ROLE_KEY"}'::jsonb
+        -- Replace YOUR_SERVICE_ROLE_KEY with your actual service role key
     ) AS request_id;
     $$
 );
@@ -45,7 +45,8 @@ SELECT cron.schedule(
     $$
     SELECT net.http_post(
         url:='https://mgdagmkhveyrshpbitdd.supabase.co/functions/v1/process-stats',
-        headers:='{"Authorization": "Bearer ' || current_setting('app.settings.service_role_key') || '"}'::jsonb
+        headers:='{"Authorization": "Bearer YOUR_SERVICE_ROLE_KEY"}'::jsonb
+        -- Replace YOUR_SERVICE_ROLE_KEY with your actual service role key
     ) AS request_id;
     $$
 );
@@ -57,7 +58,8 @@ SELECT cron.schedule(
     $$
     SELECT net.http_post(
         url:='https://mgdagmkhveyrshpbitdd.supabase.co/functions/v1/archive-expired',
-        headers:='{"Authorization": "Bearer ' || current_setting('app.settings.service_role_key') || '"}'::jsonb
+        headers:='{"Authorization": "Bearer YOUR_SERVICE_ROLE_KEY"}'::jsonb
+        -- Replace YOUR_SERVICE_ROLE_KEY with your actual service role key
     ) AS request_id;
     $$
 );
@@ -69,7 +71,8 @@ SELECT cron.schedule(
     $$
     SELECT net.http_post(
         url:='https://mgdagmkhveyrshpbitdd.supabase.co/functions/v1/queue-tokens',
-        headers:='{"Authorization": "Bearer ' || current_setting('app.settings.service_role_key') || '"}'::jsonb
+        headers:='{"Authorization": "Bearer YOUR_SERVICE_ROLE_KEY"}'::jsonb
+        -- Replace YOUR_SERVICE_ROLE_KEY with your actual service role key
     ) AS request_id;
     $$
 );
