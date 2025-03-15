@@ -13,7 +13,7 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey)
 const SOLANA_TRACKER_API_URL = Deno.env.get('SOLANA_TRACKER_API_URL')!
 const SOLANA_TRACKER_API_KEY = Deno.env.get('SOLANA_TRACKER_API_KEY')!
 const QUEUE_NAME = 'token_stats_queue'
-const MIN_MARKET_CAP = 200000 // Minimum market cap of $200K
+const MIN_MARKET_CAP = 50000 // Minimum market cap of $50K
 const TOKEN_MONITORING_HOURS = 6 // How long to monitor tokens before archiving
 
 Deno.serve(async (req) => {
