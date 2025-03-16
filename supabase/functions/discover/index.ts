@@ -159,6 +159,27 @@ Deno.serve(async (req) => {
         continue
       }
       
+      // Insert initial historical record
+      const { error: historyError } = await supabase
+        .from('historical_records')
+        .insert({
+          token_mint: token.mint,
+          name: token.name,
+          symbol: token.symbol,
+          market_cap_usd: token.marketCapUsd,
+          liquidity_usd: token.liquidityUsd,
+          cumulative_buy_volume: buyVolume,
+          cumulative_net_volume: netVolume,
+          timestamp: new Date().toISOString()
+        })
+        
+      if (historyError) {
+        console.error(`Failed to insert historical record for ${mint}:`, historyError)
+        // Continue processing even if historical record insertion fails
+      } else {
+        console.log(`Created initial historical record for token ${mint}`)
+      }
+      
       processedTokens.push({
         mint,
         name: token.name,
