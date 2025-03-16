@@ -116,19 +116,27 @@ Deno.serve(async (req) => {
       
       if (statsResponse.ok) {
         const statsData = await statsResponse.json()
-        buyVolume = statsData.buyVolume || 0
-        sellVolume = statsData.sellVolume || 0
-        netVolume = buyVolume - sellVolume
         
-        // Additional volume-based filtering
-        if (buyVolume < 0.01 * token.marketCapUsd) {
-          rejectedTokens.push({ mint, reason: `Insufficient buy volume` })
-          continue
-        }
-        
-        if (netVolume <= 0) {
-          rejectedTokens.push({ mint, reason: `Negative or zero net volume` })
-          continue
+        // Extract 24h volume data from the stats response
+        if (statsData['24h'] && statsData['24h'].volume) {
+          buyVolume = statsData['24h'].volume.buys || 0
+          sellVolume = statsData['24h'].volume.sells || 0
+          netVolume = buyVolume - sellVolume
+          
+          console.log(`Token ${mint} 24h volumes - Buy: ${buyVolume}, Sell: ${sellVolume}, Net: ${netVolume}`)
+          
+          // Additional volume-based filtering
+          if (buyVolume < 0.01 * token.marketCapUsd) {
+            rejectedTokens.push({ mint, reason: `Insufficient buy volume` })
+            continue
+          }
+          
+          if (netVolume <= 0) {
+            rejectedTokens.push({ mint, reason: `Negative or zero net volume` })
+            continue
+          }
+        } else {
+          console.warn(`No 24h volume data found for token ${mint}`)
         }
       } else {
         console.warn(`Failed to fetch stats for ${mint}: ${statsResponse.statusText}`)
