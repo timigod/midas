@@ -284,15 +284,41 @@ Deno.serve(async (req) => {
           }
         }
         
+        // Extract volume data from the 30m interval if available
+        let volumeData = { buys: 0, sells: 0 };
+        
+        // Use type assertions to handle the nested structure safely
+        if (statsData && typeof statsData === 'object') {
+          const thirtyMinData = statsData['30m'] as Record<string, any> | undefined;
+          
+          if (thirtyMinData && typeof thirtyMinData === 'object') {
+            const volumeObj = thirtyMinData.volume as Record<string, any> | undefined;
+            
+            if (volumeObj && typeof volumeObj === 'object') {
+              volumeData.buys = typeof volumeObj.buys === 'number' ? volumeObj.buys : 0;
+              volumeData.sells = typeof volumeObj.sells === 'number' ? volumeObj.sells : 0;
+              console.log(`Token ${mint} 30m volumes - Buy: ${volumeData.buys}, Sell: ${volumeData.sells}`);
+            } else {
+              console.log(`No valid volume object found for token ${mint}`);
+            }
+          } else {
+            console.log(`No valid 30m data found for token ${mint}`);
+          }
+        } else {
+          console.log(`No valid stats data found for token ${mint}`);
+        }
+        
         // Construct a TokenStats object from the token data
         const stats: TokenStats = {
           // Get market cap from the first pool (if available)
           marketCapUsd: tokenData.pools && tokenData.pools[0] ? tokenData.pools[0].marketCap.usd : 0,
           // Get liquidity from the first pool (if available)
           liquidityUsd: tokenData.pools && tokenData.pools[0] ? tokenData.pools[0].liquidity.usd : 0,
-          // Add volume data from stats if available
-          ...(statsData ? statsData : {})
+          // Add the extracted volume data
+          buyVolume: volumeData.buys,
+          sellVolume: volumeData.sells
         }
+        
         
         // First check if token exists in token_hotness table
         const { data: hotToken, error: hotTokenError } = await supabase
@@ -449,11 +475,12 @@ Deno.serve(async (req) => {
         validation.warnings.forEach(warning => console.warn(warning))
         
         // Extract the processed data
-        const { marketCapUsd, liquidityUsd, buyVolume, sellVolume, netVolume } = validation.processedData
+        const processedData = validation.processedData
+        const { marketCapUsd, liquidityUsd, netVolume } = processedData
         
         // Log volume data if available
-        if (buyVolume > 0 || sellVolume > 0) {
-          console.log(`Token ${mint} volume data: buys=${buyVolume}, sells=${sellVolume}, net=${netVolume}`)
+        if (processedData.buyVolume > 0 || processedData.sellVolume > 0) {
+          console.log(`Token ${mint} volume data: buys=${processedData.buyVolume}, sells=${processedData.sellVolume}, net=${netVolume}`)
         }
         
         // Calculate updated cumulative values using the validated data
