@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
     
     // Process each token
     const processedTokens: any[] = []
-    const queuedTokens: any[] = []
+    // Note: Token queuing is now handled by the queue-tokens function
     const rejectedTokens: { mint?: string; reason: string }[] = []
 
     for (const token of tokens) {
@@ -196,34 +196,15 @@ Deno.serve(async (req) => {
         liquidityUsd: token.liquidityUsd
       })
       
-      // Queue token for processing
-      try {
-        const queueResponse = await supabase.functions.invoke('send-message', {
-          body: {
-            queue_name: QUEUE_NAME,
-            message: {
-              mint: token.mint,
-              timestamp: currentTime
-            }
-          }
-        })
-        
-        if (queueResponse.error) {
-          console.error(`Failed to queue token ${mint}:`, queueResponse.error)
-        } else {
-          console.log(`Successfully queued token ${mint} for processing`)
-          queuedTokens.push(mint)
-        }
-      } catch (queueError) {
-        console.error(`Error invoking send-message function for ${mint}:`, queueError)
-      }
+      // Note: Token queuing has been moved to the queue-tokens function
+      // This ensures a cleaner separation of concerns in the token processing system
+      console.log(`Token ${mint} added to database, will be queued by the queue-tokens function`)
     }
     
     return new Response(
       JSON.stringify({
         message: `Processed ${tokens.length} tokens, added ${processedTokens.length} new tokens to database`,
         processed: processedTokens,
-        queued: queuedTokens,
         rejected: rejectedTokens
       }),
       { headers: { 'Content-Type': 'application/json' }, status: 200 }
