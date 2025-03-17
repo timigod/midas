@@ -56,7 +56,7 @@ function calculateGrowthPercentage(current: number, start: number): string {
 }
 
 /**
- * Format token details for the Telegram message
+ * Format token details for the Telegram message using HTML
  */
 function formatTokenMessage(token: TokenHotness): string {
   const marketCapGrowth = token.market_cap_usd / token.start_market_cap;
@@ -65,10 +65,10 @@ function formatTokenMessage(token: TokenHotness): string {
   
   return `🔥 HOT TOKEN ALERT 🔥
 
-*${token.name || 'Unknown Token'}* (${token.symbol || 'N/A'})
-\`${token.token_mint}\`
+<b>${token.name || 'Unknown Token'}</b> (${token.symbol || 'N/A'})
+<code>${token.token_mint}</code>
 
-📊 *Stats:*
+📊 <b>Stats:</b>
 • Market Cap: $${formatNumber(token.market_cap_usd)}
 • Starting Market Cap: $${formatNumber(token.start_market_cap)}
 • Growth: ${marketCapGrowth.toFixed(2)}x (${calculateGrowthPercentage(token.market_cap_usd, token.start_market_cap)})
@@ -78,39 +78,43 @@ function formatTokenMessage(token: TokenHotness): string {
 
 Detected at: ${new Date(token.detected_at).toUTCString()}
 
-🔗 https://solscan.io/token/${token.token_mint}`;
+🔗 <a href="https://solscan.io/token/${token.token_mint}">View on Solscan</a>`;
 }
 
 /**
- * Send message to Telegram channel
+ * Send message to Telegram using Bot API
  */
-async function sendTelegramMessage(message: string): Promise<Response> {
-  const params = new URLSearchParams({
-    chat_id: TELEGRAM_CHANNEL_ID,
-    text: message,
-    parse_mode: 'Markdown',
-    disable_web_page_preview: 'true'
+async function sendTelegramMessage(message: string): Promise<void> {
+  const botToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
+  const channelId = Deno.env.get('TELEGRAM_CHANNEL_ID');
+  
+  if (!botToken) {
+    throw new Error('TELEGRAM_BOT_TOKEN environment variable is not set');
+  }
+  
+  if (!channelId) {
+    throw new Error('TELEGRAM_CHANNEL_ID environment variable is not set');
+  }
+  
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  
+  console.log('Sending Telegram notification...');
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      chat_id: channelId,
+      text: message,
+      parse_mode: 'HTML',
+      disable_web_page_preview: false
+    }),
   });
-
-  try {
-    console.log('Sending Telegram notification...');
-    const response = await fetch(TELEGRAM_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString(),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Telegram API error: ${JSON.stringify(errorData)}`);
-    }
-
-    return response;
-  } catch (error) {
-    console.error('Failed to send Telegram notification:', error);
-    throw error;
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Telegram API error: ${JSON.stringify(error)}`);
   }
 }
 
