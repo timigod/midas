@@ -17,12 +17,15 @@ Deno.serve(async (req) => {
     }
 
     // Insert message into queue table
+    // The database will generate the id, which will be used as message_id for deletion
     const { error } = await supabase
       .from(queue_name)
       .insert({
+        queue_name,
+        message_id: queue_name + '_' + new Date().getTime().toString(), // Generate a unique string ID
         message,
-        status: 'pending',
-        created_at: new Date().toISOString(),
+        visible_after: new Date().toISOString(),
+        created_at: new Date().toISOString()
       })
 
     if (error) throw error
